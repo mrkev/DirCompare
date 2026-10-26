@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>DirCompare</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.kevinchavez.DirCompare</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>DirCompare</string>
+	<key>CFBundleDisplayName</key>
+	<string>DirCompare</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.developer-tools</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>DirCompare reads folder listings and file contents on your Desktop to compare them.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>DirCompare reads folder listings and file contents in Documents to compare them.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>DirCompare reads folder listings and file contents in Downloads to compare them.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>DirCompare reads folder listings and file contents on external drives to compare them.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>DirCompare reads folder listings and file contents on network volumes to compare them.</string>
+</dict>
+</plist>
