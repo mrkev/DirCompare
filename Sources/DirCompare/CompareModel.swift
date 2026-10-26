@@ -217,6 +217,36 @@ final class CompareModel {
         }
     }
 
+    // MARK: Quick Look
+
+    /// The item showing in the Quick Look panel, or `nil` when it's closed.
+    var quickLookURL: URL?
+    /// Everything the panel can page through with the arrow keys.
+    private(set) var quickLookItems: [URL] = []
+
+    /// Previews the rows' files, left copy then right copy, so the arrow keys flip between versions.
+    func quickLook(_ ids: Set<ComparisonRow.ID>) {
+        let urls = rows(for: ids).flatMap { [$0.left?.url, $0.right?.url].compactMap { $0 } }
+        quickLookItems = urls
+        quickLookURL = urls.first
+    }
+
+    /// Space bar: opens Quick Look for the selection, or closes it if it's open.
+    func toggleQuickLook() {
+        if quickLookURL != nil {
+            quickLookURL = nil
+        } else {
+            quickLook(selection)
+        }
+    }
+
+    /// Keeps an open panel in sync as the selection changes, like Finder.
+    func selectionChanged() {
+        if quickLookURL != nil {
+            quickLook(selection)
+        }
+    }
+
     func copyMarkdown() {
         guard let result else { return }
         copyToPasteboard(MarkdownExport.render(rows: visibleRows, left: result.left, right: result.right))

@@ -43,6 +43,8 @@ as files to open.)
   subfolders; ⌘[ goes back. Double-clicking anything else shows it in Finder.
 - Right-click a row to show either copy in Finder, copy paths, or (for files)
   open both in FileMerge.
+- Press Space to Quick Look the selection. For a name on both sides, the left
+  copy shows first; use the arrow keys to flip to the right copy.
 - ⇧⌘C copies the visible rows as a Markdown table.
 - **Ignore** takes comma-separated names or wildcards, like `.DS_Store, *.swp`.
 

@@ -1,4 +1,5 @@
 import DirCompareCore
+import QuickLook
 import SwiftUI
 
 struct ResultsTable: View {
@@ -48,6 +49,13 @@ struct ResultsTable: View {
         } primaryAction: { ids in
             model.activate(ids)
         }
+        .onKeyPress(.space) {
+            guard !model.selection.isEmpty || model.quickLookURL != nil else { return .ignored }
+            model.toggleQuickLook()
+            return .handled
+        }
+        .onChange(of: model.selection) { model.selectionChanged() }
+        .quickLookPreview($model.quickLookURL, in: model.quickLookItems)
         .overlay { placeholder(rowCount: rows.count) }
     }
 
@@ -218,6 +226,12 @@ struct RowMenu: View {
     let rows: [ComparisonRow]
 
     var body: some View {
+        if !rows.isEmpty {
+            Button(rows.count == 1 ? "Quick Look" : "Quick Look \(rows.count) Items") {
+                model.quickLook(Set(rows.map(\.id)))
+            }
+            Divider()
+        }
         if rows.count == 1, let row = rows.first {
             if row.bothAreFolders {
                 Button("Open Folders Side by Side") { model.open(row) }
