@@ -43,12 +43,12 @@ public enum MarkdownExport {
             "- **Left:** `\(Formatting.path(left))`",
             "- **Right:** `\(Formatting.path(right))`",
             "",
-            "| Name | Status | Left size | Right size | Left modified | Right modified | Newer |",
+            "| Path | Status | Left size | Right size | Left modified | Right modified | Newer |",
             "|---|---|---:|---:|---|---|---|",
         ]
         for row in rows {
             let cells = [
-                escape(row.name),
+                escape(row.path),
                 row.status.title,
                 Formatting.bytes(row.left?.displaySize),
                 Formatting.bytes(row.right?.displaySize),

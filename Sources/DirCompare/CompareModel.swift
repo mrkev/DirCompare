@@ -41,6 +41,10 @@ enum RowFilter: String, CaseIterable, Identifiable {
 }
 
 /// State for one comparison window.
+///
+/// The table is a tree. The top level comes from `result`; folders present on both
+/// sides can be expanded, which compares that pair one level deep (lazily, the first
+/// time) and stores the rows in `childRows`.
 @MainActor
 @Observable
 final class CompareModel {
@@ -60,6 +64,16 @@ final class CompareModel {
     /// Progress of the recursive folder checks, or `nil` when none are running.
     private(set) var folderCheck: FolderCheck?
 
+    /// Rows inside expanded folders, keyed by the folder row's ID. Kept when a folder
+    /// is collapsed, so expanding it again is instant.
+    private(set) var childRows: [ComparisonRow.ID: [ComparisonRow]] = [:]
+    /// Folder rows whose contents are being compared.
+    private(set) var loadingFolders: Set<ComparisonRow.ID> = []
+    /// Folder rows whose contents couldn't be compared, with the reason.
+    private(set) var folderErrors: [ComparisonRow.ID: String] = [:]
+    /// Expanded folder rows. Survives refreshes, so the tree stays open after ⌘R.
+    private(set) var expanded: Set<ComparisonRow.ID> = []
+
     struct FolderCheck {
         /// Folder rows not yet checked, including the current one.
         var pending: Set<ComparisonRow.ID>
@@ -73,7 +87,7 @@ final class CompareModel {
 
     /// Whether anything is running that Stop would cancel.
     var isBusy: Bool {
-        isComparing || folderCheck != nil
+        isComparing || folderCheck != nil || !loadingFolders.isEmpty
     }
 
     var filter: RowFilter = .all
@@ -84,8 +98,11 @@ final class CompareModel {
     /// Folder pairs to return to after opening subfolders side by side.
     private var history: [(left: URL, right: URL)] = []
     private var task: Task<Void, Never>?
+    private var childTasks: [ComparisonRow.ID: Task<Void, Never>] = [:]
     /// Identifies the latest comparison, so a cancelled one can't overwrite its state.
     private var generation = 0
+    /// The options of the latest comparison. Expanded folders use the same ones.
+    private var activeOptions = ComparisonOptions()
 
     private let defaults = UserDefaults.standard
 
@@ -107,6 +124,10 @@ final class CompareModel {
             ?? FileManager.default.homeDirectoryForCurrentUser
         rightURL = launchFolder("right")
             ?? defaults.string(forKey: Keys.right).map { URL(filePath: $0) }
+
+        #if DEBUG
+        DebugTools.apply(to: self)
+        #endif
     }
 
     // MARK: Folders
@@ -121,6 +142,7 @@ final class CompareModel {
 
     func setFolder(_ url: URL, side: Side) {
         history.removeAll()
+        expanded.removeAll()
         switch side {
         case .left: leftURL = url
         case .right: rightURL = url
@@ -136,13 +158,14 @@ final class CompareModel {
         compare()
     }
 
-    /// Opens a pair of subfolders side by side, remembering where we came from.
+    /// Makes a pair of subfolders the folders being compared, remembering where we came from.
     func open(_ row: ComparisonRow) {
         guard row.bothAreFolders, let left = row.left?.url, let right = row.right?.url,
               let currentLeft = leftURL, let currentRight = rightURL else { return }
         history.append((currentLeft, currentRight))
         leftURL = left
         rightURL = right
+        expanded.removeAll()
         compare()
     }
 
@@ -150,6 +173,7 @@ final class CompareModel {
         guard let previous = history.popLast() else { return }
         leftURL = previous.left
         rightURL = previous.right
+        expanded.removeAll()
         compare()
     }
 
@@ -157,7 +181,7 @@ final class CompareModel {
 
     func compare() {
         guard let left = leftURL, let right = rightURL else { return }
-        task?.cancel()
+        cancelTasks()
         generation += 1
         let current = generation
 
@@ -166,10 +190,14 @@ final class CompareModel {
             compareContents: compareContents,
             ignorePatterns: ComparisonOptions.parsePatterns(ignoreText)
         )
+        activeOptions = options
         isComparing = true
         errorMessage = nil
         progress = nil
         folderCheck = nil
+        childRows.removeAll()
+        loadingFolders.removeAll()
+        folderErrors.removeAll()
         let checkFolders = checkFoldersRecursively
 
         // The task runs on the main actor; the comparison itself runs in the background.
@@ -192,13 +220,17 @@ final class CompareModel {
             switch outcome {
             case .success(let result):
                 self.result = result
-                selection.formIntersection(result.rows.map(\.id))
             case .failure(let error):
                 result = nil
                 errorMessage = error.localizedDescription
             }
             isComparing = false
             progress = nil
+            guard case .success = outcome else { return }
+
+            await reloadExpandedFolders(generation: current)
+            guard generation == current else { return }
+            selection = selection.filter { row(withID: $0) != nil }
 
             if checkFolders {
                 await checkFoldersRecursively(options: options, generation: current)
@@ -244,11 +276,20 @@ final class CompareModel {
     }
 
     func cancel() {
-        task?.cancel()
+        cancelTasks()
         generation += 1
         isComparing = false
         progress = nil
         folderCheck = nil
+        loadingFolders.removeAll()
+    }
+
+    private func cancelTasks() {
+        task?.cancel()
+        for childTask in childTasks.values {
+            childTask.cancel()
+        }
+        childTasks.removeAll()
     }
 
     /// Saves the options and compares again.
@@ -260,25 +301,117 @@ final class CompareModel {
         compare()
     }
 
+    // MARK: Expanding folders
+
+    func isExpanded(_ id: ComparisonRow.ID) -> Bool {
+        expanded.contains(id)
+    }
+
+    /// Expands or collapses a folder row, comparing its contents the first time it's expanded.
+    func setExpanded(_ id: ComparisonRow.ID, _ isExpanded: Bool) {
+        guard isExpanded else {
+            expanded.remove(id)
+            return
+        }
+        expanded.insert(id)
+        guard childRows[id] == nil, !loadingFolders.contains(id), let row = row(withID: id) else { return }
+        childTasks[id] = Task {
+            await loadChildren(of: row)
+            childTasks[id] = nil
+        }
+    }
+
+    func toggleExpanded(_ id: ComparisonRow.ID) {
+        setExpanded(id, !isExpanded(id))
+    }
+
+    private func loadChildren(of row: ComparisonRow) async {
+        guard let left = row.left?.url, let right = row.right?.url else { return }
+        let current = generation
+        loadingFolders.insert(row.id)
+        folderErrors[row.id] = nil
+
+        do {
+            let level = try await DirectoryComparer(options: activeOptions).compareAsync(left, right, under: row)
+            guard generation == current else { return }
+            childRows[row.id] = level.rows
+        } catch is CancellationError {
+            // Cancelled by a new comparison or Stop, which reset the loading state.
+            return
+        } catch {
+            guard generation == current else { return }
+            folderErrors[row.id] = error.localizedDescription
+        }
+        loadingFolders.remove(row.id)
+    }
+
+    /// After a refresh, compares the expanded folders again, parents before children.
+    private func reloadExpandedFolders(generation current: Int) async {
+        for id in expanded.sorted(by: { $0.depth < $1.depth }) {
+            guard generation == current else { return }
+            if let row = row(withID: id), row.bothAreFolders {
+                await loadChildren(of: row)
+            } else {
+                // Gone, no longer a folder pair, or inside a collapsed folder.
+                expanded.remove(id)
+            }
+        }
+    }
+
     // MARK: Rows
 
-    var visibleRows: [ComparisonRow] {
-        guard let result else { return [] }
+    /// The loaded rows inside a folder row, or the top-level rows for `""`.
+    func rows(in parentID: ComparisonRow.ID) -> [ComparisonRow]? {
+        parentID.isEmpty ? result?.rows : childRows[parentID]
+    }
+
+    func row(withID id: ComparisonRow.ID) -> ComparisonRow? {
+        rows(in: id.parentID)?.first { $0.id == id }
+    }
+
+    /// The rows to show inside a folder (or at the top level), filtered and sorted.
+    /// A folder that doesn't match is kept if anything loaded inside it does, so the
+    /// match stays reachable.
+    func visibleChildren(of parentID: ComparisonRow.ID) -> [ComparisonRow] {
+        guard let rows = rows(in: parentID) else { return [] }
         let query = searchText.trimmingCharacters(in: .whitespaces)
-        return result.rows
-            .filter { filter.matches($0) && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query)) }
-            .sorted(using: sortOrder)
+        guard filter != .all || !query.isEmpty else {
+            return rows.sorted(using: sortOrder)
+        }
+        return rows.filter { isVisible($0, query: query) }.sorted(using: sortOrder)
+    }
+
+    private func isVisible(_ row: ComparisonRow, query: String) -> Bool {
+        if filter.matches(row) && (query.isEmpty || row.name.localizedCaseInsensitiveContains(query)) {
+            return true
+        }
+        return childRows[row.id]?.contains { isVisible($0, query: query) } ?? false
+    }
+
+    /// Every row currently showing, in display order (expanded folders' contents included).
+    var visibleRows: [ComparisonRow] {
+        var rows: [ComparisonRow] = []
+        func append(_ parentID: ComparisonRow.ID) {
+            for row in visibleChildren(of: parentID) {
+                rows.append(row)
+                if expanded.contains(row.id) {
+                    append(row.id)
+                }
+            }
+        }
+        append("")
+        return rows
     }
 
     func rows(for ids: Set<ComparisonRow.ID>) -> [ComparisonRow] {
         visibleRows.filter { ids.contains($0.id) }
     }
 
-    /// Double-click: open folder pairs side by side, otherwise show the entries in Finder.
+    /// Double-click: expand or collapse folder pairs, otherwise show the entries in Finder.
     func activate(_ ids: Set<ComparisonRow.ID>) {
         let rows = rows(for: ids)
         if rows.count == 1, let row = rows.first, row.bothAreFolders {
-            open(row)
+            toggleExpanded(row.id)
         } else {
             revealInFinder(rows.flatMap { [$0.left?.url, $0.right?.url].compactMap { $0 } })
         }
@@ -338,6 +471,18 @@ final class CompareModel {
     private nonisolated static func isDirectory(_ path: String) -> Bool {
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+}
+
+private extension ComparisonRow.ID {
+    /// The ID of the folder row containing this one, or `""` at the top level.
+    var parentID: String {
+        guard let slash = lastIndex(of: "/") else { return "" }
+        return String(self[..<slash])
+    }
+
+    var depth: Int {
+        count { $0 == "/" }
     }
 }
 

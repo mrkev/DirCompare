@@ -60,7 +60,8 @@ struct StatusBar: View {
         if let check = model.folderCheck {
             folderCheckProgress(check)
         } else {
-            let shown = model.visibleRows.count
+            // Top level only, like the counts on the left.
+            let shown = model.visibleChildren(of: "").count
             Text(shown == result.rows.count ? "\(shown) items" : "Showing \(shown) of \(result.rows.count)")
                 .foregroundStyle(.secondary)
                 .monospacedDigit()

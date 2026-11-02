@@ -39,10 +39,14 @@ as files to open.)
 - The newer modification date is shown in bold. Dates within 2 seconds count as
   equal, because FAT/exFAT volumes store times at 2-second resolution.
 - Click the counts in the bottom bar to filter the table; click again to clear.
-- Double-click a folder that exists on both sides to compare those two
-  subfolders; ⌘[ goes back. Double-clicking anything else shows it in Finder.
+- Folders that exist on both sides can be expanded in place, like Finder's list
+  view: click the triangle or double-click the row. Their contents are compared
+  the first time you expand them, and stay open when you refresh. The filter
+  and search keep a folder visible when something loaded inside it matches.
+- Double-clicking anything else shows it in Finder.
 - Right-click a row to show either copy in Finder, copy paths, or (for files)
-  open both in FileMerge.
+  open both in FileMerge. For folders, *Open Folders Side by Side* makes that
+  pair the folders being compared; ⌘[ goes back.
 - Press Space to Quick Look the selection. For a name on both sides, the left
   copy shows first; use the arrow keys to flip to the right copy.
 - ⇧⌘C copies the visible rows as a Markdown table.
@@ -53,6 +57,8 @@ as files to open.)
   with a summary such as "3 only left, 2 different" next to the name. A folder
   that exists on only one side counts as one item, however much it contains.
   ⌘. stops the check; folders not yet checked keep their date-only status.
+  For now this fills in top-level folders only; folders inside an expanded
+  folder show their date-only status.
 
 ## Notes
 
@@ -64,6 +70,17 @@ as files to open.)
 - The app is ad-hoc signed. macOS will ask for access to Desktop, Documents,
   Downloads and external volumes the first time it reads them, and may ask
   again after a rebuild, since each build has a new signature.
+
+## Checking the UI from a script
+
+Debug builds can render their window to a PNG, which doesn't need Screen
+Recording permission. See `Sources/DirCompare/DebugTools.swift` for all options.
+
+```sh
+swift build
+DIRCOMPARE_SNAPSHOT=/tmp/out.png DIRCOMPARE_EXPAND="docs,docs/notes" \
+  .build/debug/DirCompare -left ~/a -right ~/b
+```
 
 ## Layout
 

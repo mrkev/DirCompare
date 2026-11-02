@@ -20,6 +20,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Needed when running the bare executable (`swift run`) rather than the .app bundle.
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
+        #if DEBUG
+        DebugTools.scheduleSnapshotIfRequested()
+        #endif
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

@@ -454,7 +454,7 @@ struct FormattingTests {
             - **Left:** `/a`
             - **Right:** `/b`
 
-            | Name | Status | Left size | Right size | Left modified | Right modified | Newer |
+            | Path | Status | Left size | Right size | Left modified | Right modified | Newer |
             |---|---|---:|---:|---|---|---|
             | x\\|y | Different | 5 | 6 | 2026-01-01 00:00 | 2026-02-01 00:00 | Right |
             | dir | Only left | — | — | 2026-01-01 00:00 | — | — |
@@ -521,6 +521,16 @@ struct FolderSummaryTests {
         #expect(summary.itemCount == 0)
         #expect(summary.status == .identical)
         #expect(summary.description == "Both empty")
+    }
+
+    @Test func singleItemWording() throws {
+        let fixture = try Fixture()
+        try fixture.file("only", in: .left, contents: "1")
+        try fixture.file("only", in: .right, contents: "1")
+
+        let summary = try DirectoryComparer().summarizeFolders(fixture.left, fixture.right)
+
+        #expect(summary.description == "The 1 item matches")
     }
 
     @Test func respectsOptions() throws {
@@ -638,5 +648,65 @@ final class FolderUpdates: @unchecked Sendable {
 
     var all: [FolderProgress] {
         lock.withLock { updates }
+    }
+}
+
+@Suite("Rows inside subfolders")
+struct NestedRowTests {
+    @Test func topLevelRowsHaveNoParent() throws {
+        let fixture = try Fixture()
+        try fixture.file("a.txt", in: .left)
+
+        let row = try #require(try fixture.compare().row("a.txt"))
+
+        #expect(row.id == "a.txt")
+        #expect(row.path == "a.txt")
+        #expect(row.parentID == "")
+    }
+
+    @Test func childRowsArePrefixedWithTheirParent() throws {
+        let fixture = try Fixture()
+        for side in [Side.left, .right] {
+            try fixture.directory("outer/inner", in: side)
+            try fixture.file("outer/inner/file.txt", in: side, contents: "same")
+        }
+        let comparer = DirectoryComparer()
+
+        let outer = try #require(try fixture.compare().row("outer"))
+        let level1 = try comparer.compare(outer.left!.url, outer.right!.url, under: outer)
+        let inner = try #require(level1.row("inner"))
+        let level2 = try comparer.compare(inner.left!.url, inner.right!.url, under: inner)
+        let file = try #require(level2.row("file.txt"))
+
+        #expect(inner.id == "outer/inner")
+        #expect(inner.path == "outer/inner")
+        #expect(inner.parentID == "outer")
+        #expect(file.id == "outer/inner/file.txt")
+        #expect(file.path == "outer/inner/file.txt")
+        #expect(file.parentID == "outer/inner")
+        #expect(file.status == .identical)
+    }
+
+    @Test func idsUseNormalizedNamesButPathsKeepDiskNames() throws {
+        let fixture = try Fixture()
+        let decomposed = "cafe\u{301}"
+        try fixture.directory(decomposed, in: .left)
+        try fixture.directory(decomposed, in: .right)
+        try fixture.file("\(decomposed)/x", in: .left)
+
+        let parent = try #require(try fixture.compare().rows.first)
+        let child = try #require(try DirectoryComparer()
+            .compare(parent.left!.url, parent.right!.url, under: parent).rows.first)
+
+        #expect(child.id == "caf\u{E9}/x")
+        #expect(child.path.unicodeScalars.elementsEqual("\(parent.name)/x".unicodeScalars))
+    }
+
+    @Test func markdownUsesPaths() {
+        let row = ComparisonRow(id: "a/b", name: "b", path: "a/b", left: nil, right: nil, status: .onlyLeft)
+
+        let markdown = MarkdownExport.render(rows: [row], left: URL(filePath: "/l"), right: URL(filePath: "/r"))
+
+        #expect(markdown.contains("| a/b | Only left |"))
     }
 }

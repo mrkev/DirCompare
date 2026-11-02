@@ -43,9 +43,12 @@ public enum ComparisonStatus: String, Sendable, Hashable, CaseIterable {
 
 /// One name that exists in either or both folders.
 public struct ComparisonRow: Sendable, Hashable, Identifiable {
-    /// The Unicode-normalized name used to pair entries across folders.
+    /// The Unicode-normalized path, relative to the compared folders, used to pair
+    /// entries across folders. For top-level rows it's just the normalized name.
     public var id: String
     public var name: String
+    /// The path relative to the compared folders, as named on disk (e.g. `a/b/file`).
+    public var path: String
     public var left: EntryInfo?
     public var right: EntryInfo?
     public var status: ComparisonStatus
@@ -60,6 +63,7 @@ public struct ComparisonRow: Sendable, Hashable, Identifiable {
     public init(
         id: String,
         name: String,
+        path: String? = nil,
         left: EntryInfo?,
         right: EntryInfo?,
         status: ComparisonStatus,
@@ -68,6 +72,7 @@ public struct ComparisonRow: Sendable, Hashable, Identifiable {
     ) {
         self.id = id
         self.name = name
+        self.path = path ?? name
         self.left = left
         self.right = right
         self.status = status
@@ -77,6 +82,12 @@ public struct ComparisonRow: Sendable, Hashable, Identifiable {
 
     public var kind: EntryKind {
         (left ?? right)?.kind ?? .other
+    }
+
+    /// The ID of the folder row this row sits in, or `""` at the top level.
+    public var parentID: String {
+        guard let slash = id.lastIndex(of: "/") else { return "" }
+        return String(id[..<slash])
     }
 
     /// Whether the row is worth a look: anything except identical files

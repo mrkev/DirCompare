@@ -6,16 +6,24 @@ struct ResultsTable: View {
     @Bindable var model: CompareModel
 
     var body: some View {
-        let rows = model.visibleRows
-
-        Table(rows, selection: $model.selection, sortOrder: $model.sortOrder) {
+        Table(of: ComparisonRow.self, selection: $model.selection, sortOrder: $model.sortOrder) {
             TableColumn("Name", value: \.name, comparator: .localizedStandard) { row in
                 NameCell(row: row)
             }
-            .width(min: 160, ideal: 260)
+            .width(min: 180, ideal: 300)
 
             TableColumn("Status", value: \.statusRank) { row in
-                if model.folderCheck?.current == row.id {
+                if model.loadingFolders.contains(row.id) {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text("Loading…")
+                    }
+                    .foregroundStyle(.secondary)
+                } else if let error = model.folderErrors[row.id] {
+                    Label("Couldn’t read", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.secondary)
+                        .help(error)
+                } else if model.folderCheck?.current == row.id {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.mini)
                         Text("Checking…")
@@ -54,6 +62,8 @@ struct ResultsTable: View {
                 NewerCell(side: row.newer)
             }
             .width(min: 60, ideal: 70)
+        } rows: {
+            FolderRows(model: model, parentID: "")
         }
         .contextMenu(forSelectionType: ComparisonRow.ID.self) { ids in
             RowMenu(model: model, rows: model.rows(for: ids))
@@ -67,7 +77,7 @@ struct ResultsTable: View {
         }
         .onChange(of: model.selection) { model.selectionChanged() }
         .quickLookPreview($model.quickLookURL, in: model.quickLookItems)
-        .overlay { placeholder(rowCount: rows.count) }
+        .overlay { placeholder(rowCount: model.visibleChildren(of: "").count) }
     }
 
     @ViewBuilder
@@ -103,6 +113,34 @@ struct ResultsTable: View {
                 ContentUnavailableView("Nothing to Show", systemImage: "line.3.horizontal.decrease.circle")
             }
         }
+    }
+}
+
+// MARK: - Tree
+
+/// The rows inside one folder (or the top level). Folders present on both sides
+/// get a disclosure triangle; expanding one loads its contents.
+struct FolderRows: TableRowContent {
+    let model: CompareModel
+    let parentID: ComparisonRow.ID
+
+    var tableRowBody: some TableRowContent<ComparisonRow> {
+        ForEach(model.visibleChildren(of: parentID)) { row in
+            if row.bothAreFolders {
+                DisclosureTableRow(row, isExpanded: expansion(of: row.id)) {
+                    FolderRows(model: model, parentID: row.id)
+                }
+            } else {
+                TableRow(row)
+            }
+        }
+    }
+
+    private func expansion(of id: ComparisonRow.ID) -> Binding<Bool> {
+        Binding(
+            get: { model.isExpanded(id) },
+            set: { model.setExpanded(id, $0) }
+        )
     }
 }
 
@@ -245,6 +283,7 @@ struct RowMenu: View {
         }
         if rows.count == 1, let row = rows.first {
             if row.bothAreFolders {
+                Button(model.isExpanded(row.id) ? "Collapse" : "Expand") { model.toggleExpanded(row.id) }
                 Button("Open Folders Side by Side") { model.open(row) }
             }
             if row.bothAreFiles, FileMerge.isAvailable, let left = row.left?.url, let right = row.right?.url {

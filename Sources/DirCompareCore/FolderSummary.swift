@@ -38,7 +38,12 @@ public struct FolderSummary: Sendable, Hashable {
         if different > 0 { parts.append("\(different) different") }
         if unreadable > 0 { parts.append("\(unreadable) unreadable") }
         if parts.isEmpty {
-            parts.append(identical == 0 && unchecked == 0 ? "Both empty" : "All \(itemCount) items match")
+            let matching = switch itemCount {
+            case 0: "Both empty"
+            case 1: "The 1 item matches"
+            default: "All \(itemCount) items match"
+            }
+            parts.append(matching)
         }
         if unchecked > 0 { parts.append("\(unchecked) not checked") }
         return parts.joined(separator: ", ")

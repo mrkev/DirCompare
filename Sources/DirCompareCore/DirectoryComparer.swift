@@ -14,15 +14,20 @@ public struct DirectoryComparer: Sendable {
     public func compareAsync(
         _ left: URL,
         _ right: URL,
+        under parent: ComparisonRow? = nil,
         progress: (@Sendable (ComparisonProgress) -> Void)? = nil
     ) async throws -> DirectoryComparison {
-        try compare(left, right, progress: progress)
+        try compare(left, right, under: parent, progress: progress)
     }
 
     /// Compares two folders synchronously. Throws `CancellationError` if the current task is cancelled.
+    ///
+    /// - Parameter parent: The folder row being expanded, when comparing a subfolder pair.
+    ///   Row IDs and paths are made relative to the top level by prefixing the parent's.
     public func compare(
         _ left: URL,
         _ right: URL,
+        under parent: ComparisonRow? = nil,
         progress: (@Sendable (ComparisonProgress) -> Void)? = nil
     ) throws -> DirectoryComparison {
         let leftNames = try listing(of: left)
@@ -41,7 +46,12 @@ public struct DirectoryComparer: Sendable {
                 total: keys.count,
                 currentName: leftEntry?.name ?? rightEntry?.name
             ))
-            rows.append(try compareEntries(id: key, left: leftEntry, right: rightEntry))
+            var row = try compareEntries(id: key, left: leftEntry, right: rightEntry)
+            if let parent {
+                row.id = "\(parent.id)/\(row.id)"
+                row.path = "\(parent.path)/\(row.path)"
+            }
+            rows.append(row)
         }
         progress?(ComparisonProgress(completed: keys.count, total: keys.count, currentName: nil))
 
