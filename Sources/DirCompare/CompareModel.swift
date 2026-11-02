@@ -234,26 +234,32 @@ final class CompareModel {
 
             if checkFolders {
                 await checkFoldersRecursively(options: options, generation: current)
+                #if DEBUG
+                if generation == current, DebugTools.expandsDifferences {
+                    expandDifferences()
+                }
+                #endif
             }
         }
     }
 
-    /// Checks each folder pair in the current result, one at a time, updating rows as they finish.
-    /// The top-level results are already showing, so this only fills in folder statuses.
+    /// Checks each top-level folder pair, one at a time. The top-level results are already
+    /// showing, so this fills in folder statuses and adds the rows of every folder that
+    /// differs to the tree, so expanding those is instant and filters can see inside them.
     private func checkFoldersRecursively(options: ComparisonOptions, generation current: Int) async {
         guard let folders = result?.rows.filter(\.bothAreFolders), !folders.isEmpty else { return }
         folderCheck = FolderCheck(pending: Set(folders.map(\.id)), total: folders.count)
         let comparer = DirectoryComparer(options: options)
 
         for row in folders {
-            guard generation == current, let left = row.left?.url, let right = row.right?.url else { return }
+            guard generation == current else { return }
             folderCheck?.current = row.id
             folderCheck?.currentName = row.name
             folderCheck?.progress = nil
 
-            let summary: FolderSummary
+            let checked: FolderCheckResult
             do {
-                summary = try await comparer.summarizeFoldersAsync(left, right) { update in
+                checked = try await comparer.checkFolderAsync(row) { update in
                     Task { @MainActor in
                         if self.generation == current, self.folderCheck?.current == row.id {
                             self.folderCheck?.progress = update
@@ -267,12 +273,34 @@ final class CompareModel {
 
             guard generation == current else { return }
             if let index = result?.rows.firstIndex(where: { $0.id == row.id }) {
-                result?.rows[index].apply(summary)
+                result?.rows[index].apply(checked.summary)
             }
+            // The check's rows replace any loaded by expanding, since they carry folder statuses.
+            childRows.merge(checked.levels) { _, checkedRows in checkedRows }
+            markMatchingFolders()
             folderCheck?.pending.remove(row.id)
             folderCheck?.completed += 1
         }
         folderCheck = nil
+    }
+
+    /// Inside a folder known to match, every subfolder matches too. Loading a folder by
+    /// expanding it only compares dates for its subfolders, so mark them as matching.
+    private func markMatchingFolders() {
+        // Parents first, so a newly marked folder's own loaded contents get marked too.
+        for parentID in childRows.keys.sorted(by: { $0.depth < $1.depth }) {
+            guard row(withID: parentID)?.status == .identical else { continue }
+            markSubfoldersIdentical(in: parentID)
+        }
+    }
+
+    private func markSubfoldersIdentical(in parentID: ComparisonRow.ID) {
+        guard var rows = childRows[parentID] else { return }
+        for index in rows.indices where rows[index].status == .folders {
+            rows[index].status = .identical
+            rows[index].note = nil
+        }
+        childRows[parentID] = rows
     }
 
     func cancel() {
@@ -325,6 +353,27 @@ final class CompareModel {
         setExpanded(id, !isExpanded(id))
     }
 
+    /// Whether the recursive check has found differences inside any folder yet.
+    var canExpandDifferences: Bool {
+        result?.rows.contains(where: \.hasDifferencesInside) ?? false
+    }
+
+    /// Expands every checked folder that has differences inside, all the way down,
+    /// so each difference is showing.
+    func expandDifferences() {
+        func expand(in parentID: ComparisonRow.ID) {
+            for row in rows(in: parentID) ?? [] where row.hasDifferencesInside && childRows[row.id] != nil {
+                expanded.insert(row.id)
+                expand(in: row.id)
+            }
+        }
+        expand(in: "")
+    }
+
+    func collapseAll() {
+        expanded.removeAll()
+    }
+
     private func loadChildren(of row: ComparisonRow) async {
         guard let left = row.left?.url, let right = row.right?.url else { return }
         let current = generation
@@ -335,6 +384,9 @@ final class CompareModel {
             let level = try await DirectoryComparer(options: activeOptions).compareAsync(left, right, under: row)
             guard generation == current else { return }
             childRows[row.id] = level.rows
+            if row.status == .identical {
+                markSubfoldersIdentical(in: row.id)
+            }
         } catch is CancellationError {
             // Cancelled by a new comparison or Stop, which reset the loading state.
             return
@@ -471,6 +523,13 @@ final class CompareModel {
     private nonisolated static func isDirectory(_ path: String) -> Bool {
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+}
+
+private extension ComparisonRow {
+    /// A folder pair the recursive check found differences inside.
+    var hasDifferencesInside: Bool {
+        bothAreFolders && folderSummary.map { $0.status != .identical } == true
     }
 }
 

@@ -57,8 +57,11 @@ as files to open.)
   with a summary such as "3 only left, 2 different" next to the name. A folder
   that exists on only one side counts as one item, however much it contains.
   ⌘. stops the check; folders not yet checked keep their date-only status.
-  For now this fills in top-level folders only; folders inside an expanded
-  folder show their date-only status.
+  The check fills in the whole tree: every folder at every depth gets a status,
+  expanding a checked folder is instant, and filters and search see inside
+  folders you haven't expanded. **Expand Differences** (⌘E) opens the tree down
+  to every difference; **Collapse All** is ⇧⌘E. To save memory, folders whose
+  contents all match keep only their summary and are re-read if you expand them.
 
 ## Notes
 

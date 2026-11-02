@@ -607,11 +607,11 @@ struct FolderSummaryTests {
     @Test func cancellation() async throws {
         let fixture = try Fixture()
         try mirroredTree(fixture)
-        let (left, right) = (fixture.left, fixture.right)
+        let row = try #require(try fixture.compare().row("a"))
 
         let task = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            return try await DirectoryComparer().summarizeFoldersAsync(left, right)
+            return try await DirectoryComparer().checkFolderAsync(row)
         }
 
         await #expect(throws: CancellationError.self) {
@@ -708,5 +708,100 @@ struct NestedRowTests {
         let markdown = MarkdownExport.render(rows: [row], left: URL(filePath: "/l"), right: URL(filePath: "/r"))
 
         #expect(markdown.contains("| a/b | Only left |"))
+    }
+}
+
+@Suite("Keeping levels from recursive checks")
+struct FolderCheckTests {
+    /// a/            differs, deep down
+    ///   b/c.txt     different
+    ///   same/f.txt  identical, so a/same isn't kept
+    ///   top.txt     identical
+    /// z/            identical
+    func tree(_ fixture: Fixture) throws -> DirectoryComparison {
+        for side in [Side.left, .right] {
+            try fixture.directory("a/b", in: side)
+            try fixture.directory("a/same", in: side)
+            try fixture.directory("z", in: side)
+            try fixture.file("a/same/f.txt", in: side, contents: "f")
+            try fixture.file("a/top.txt", in: side, contents: "t")
+            try fixture.file("z/z.txt", in: side, contents: "z")
+        }
+        try fixture.file("a/b/c.txt", in: .left, contents: "left")
+        try fixture.file("a/b/c.txt", in: .right, contents: "right!")
+        return try fixture.compare()
+    }
+
+    @Test func keepsOnlyFoldersThatDiffer() throws {
+        let fixture = try Fixture()
+        let a = try #require(try tree(fixture).row("a"))
+
+        let result = try DirectoryComparer().checkFolder(a)
+
+        #expect(Set(result.levels.keys) == ["a", "a/b"])
+        #expect(result.levels["a"]?.map(\.id) == ["a/b", "a/same", "a/top.txt"])
+        #expect(result.levels["a/b"]?.map(\.id) == ["a/b/c.txt"])
+        #expect(result.summary.different == 1)
+        #expect(result.summary.identical == 2)
+    }
+
+    @Test func subfolderRowsHaveTheirOwnSummaries() throws {
+        let fixture = try Fixture()
+        let a = try #require(try tree(fixture).row("a"))
+
+        let levels = try DirectoryComparer().checkFolder(a).levels
+        let b = try #require(levels["a"]?.first { $0.id == "a/b" })
+        let same = try #require(levels["a"]?.first { $0.id == "a/same" })
+
+        #expect(b.status == .different)
+        #expect(b.note == "1 different")
+        #expect(b.path == "a/b")
+        #expect(same.status == .identical)
+        #expect(same.folderSummary?.identical == 1)
+        #expect(levels["a/b"]?.first?.status == .different)
+        #expect(levels["a/b"]?.first?.path == "a/b/c.txt")
+    }
+
+    @Test func identicalFolderKeepsNothing() throws {
+        let fixture = try Fixture()
+        let z = try #require(try tree(fixture).row("z"))
+
+        let result = try DirectoryComparer().checkFolder(z)
+
+        #expect(result.levels.isEmpty)
+        #expect(result.summary.status == .identical)
+    }
+
+    @Test func matchesSummarizeFolders() throws {
+        let fixture = try Fixture()
+        let a = try #require(try tree(fixture).row("a"))
+        let comparer = DirectoryComparer()
+
+        #expect(try comparer.checkFolder(a).summary == comparer.summarizeFolders(a.left!.url, a.right!.url))
+    }
+
+    @Test func unreadableSubfolderIsKept() throws {
+        let fixture = try Fixture()
+        let a = try #require(try tree(fixture).row("a"))
+        let locked = fixture.right.appendingPathComponent("a/same")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+
+        let result = try DirectoryComparer().checkFolder(a)
+
+        let same = try #require(result.levels["a"]?.first { $0.id == "a/same" })
+        #expect(same.status == .unreadable)
+        // a/same couldn't be listed, so there are no rows to keep for it.
+        #expect(result.levels["a/same"] == nil)
+    }
+
+    @Test func progressPathsAreRelativeToTheCheckedFolder() throws {
+        let fixture = try Fixture()
+        let a = try #require(try tree(fixture).row("a"))
+
+        let updates = FolderUpdates()
+        _ = try DirectoryComparer().checkFolder(a, progressInterval: .zero) { updates.append($0) }
+
+        #expect(Set(updates.all.dropLast().map(\.currentPath)) == ["b/c.txt", "same/f.txt", "top.txt"])
+        #expect(updates.all.last?.itemsCompared == 3)
     }
 }

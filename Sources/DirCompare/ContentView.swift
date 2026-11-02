@@ -37,6 +37,16 @@ struct ContentView: View {
                 .help("Back to the parent folders (⌘[)")
         }
         ToolbarItemGroup(placement: .primaryAction) {
+            Button("Expand Differences", systemImage: "rectangle.expand.vertical", action: model.expandDifferences)
+                .disabled(!model.canExpandDifferences)
+                .keyboardShortcut("e", modifiers: .command)
+                .help("Expand folders down to every difference the recursive check found (⌘E)")
+
+            Button("Collapse All", systemImage: "rectangle.compress.vertical", action: model.collapseAll)
+                .disabled(model.expanded.isEmpty)
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .help("Collapse all folders (⇧⌘E)")
+
             Button("Swap Sides", systemImage: "arrow.left.arrow.right", action: model.swapSides)
                 .disabled(!model.canCompare)
                 .keyboardShortcut("s", modifiers: [.command, .shift])

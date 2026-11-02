@@ -74,12 +74,34 @@ public struct FolderProgress: Sendable, Hashable {
     }
 }
 
+/// What a recursive check of one folder row found, at every level.
+public struct FolderCheckResult: Sendable {
+    /// Counts for the whole folder pair.
+    public var summary: FolderSummary
+    /// The rows directly inside each folder that contains a difference, keyed by that
+    /// folder's row ID (the checked row itself included, when it differs). Subfolder rows
+    /// have their own summaries applied. Folders whose contents all match aren't kept, to
+    /// save memory; their rows still carry a summary.
+    public var levels: [ComparisonRow.ID: [ComparisonRow]]
+}
+
 extension ComparisonRow {
     /// Replaces a folder row's date-only status with the result of checking its contents.
     public mutating func apply(_ summary: FolderSummary) {
         folderSummary = summary
         status = summary.status
         note = summary.description
+    }
+}
+
+extension FolderSummary {
+    mutating func merge(_ other: FolderSummary) {
+        onlyLeft += other.onlyLeft
+        onlyRight += other.onlyRight
+        different += other.different
+        unreadable += other.unreadable
+        unchecked += other.unchecked
+        identical += other.identical
     }
 }
 
@@ -95,38 +117,68 @@ extension DirectoryComparer {
         progressInterval: Duration = .milliseconds(100),
         progress: (@Sendable (FolderProgress) -> Void)? = nil
     ) throws -> FolderSummary {
-        var walker = FolderWalker(comparer: self, progress: progress, interval: progressInterval)
-        try walker.walk(left, right, path: "")
+        var walker = FolderWalker(comparer: self, keepLevels: false, progress: progress, interval: progressInterval)
+        let summary = try walker.walk(left, right, under: nil, path: "")
         walker.report(path: "", force: true)
-        return walker.summary
+        return summary
     }
 
-    /// Runs `summarizeFolders` on a background thread. Cancelling the calling task stops it.
-    @concurrent
-    public func summarizeFoldersAsync(
-        _ left: URL,
-        _ right: URL,
+    /// Checks a folder row's contents recursively, keeping the rows of every folder that
+    /// differs so they can be shown without reading the disk again. Row IDs and paths are
+    /// relative to the top level, like those from `compare(_:_:under:)`.
+    public func checkFolder(
+        _ row: ComparisonRow,
+        progressInterval: Duration = .milliseconds(100),
         progress: (@Sendable (FolderProgress) -> Void)? = nil
-    ) async throws -> FolderSummary {
-        try summarizeFolders(left, right, progress: progress)
+    ) throws -> FolderCheckResult {
+        guard let left = row.left?.url, let right = row.right?.url else {
+            return FolderCheckResult(summary: FolderSummary(), levels: [:])
+        }
+        var walker = FolderWalker(comparer: self, keepLevels: true, progress: progress, interval: progressInterval)
+        let summary = try walker.walk(left, right, under: row, path: "")
+        walker.report(path: "", force: true)
+        return FolderCheckResult(summary: summary, levels: walker.levels)
+    }
+
+    /// Runs `checkFolder` on a background thread. Cancelling the calling task stops it.
+    @concurrent
+    public func checkFolderAsync(
+        _ row: ComparisonRow,
+        progress: (@Sendable (FolderProgress) -> Void)? = nil
+    ) async throws -> FolderCheckResult {
+        try checkFolder(row, progress: progress)
     }
 }
 
 private struct FolderWalker {
     let comparer: DirectoryComparer
+    let keepLevels: Bool
     let progress: (@Sendable (FolderProgress) -> Void)?
     let interval: Duration
 
-    var summary = FolderSummary()
+    var levels: [ComparisonRow.ID: [ComparisonRow]] = [:]
+    var itemsCompared = 0
     var lastReport = ContinuousClock.now
 
-    init(comparer: DirectoryComparer, progress: (@Sendable (FolderProgress) -> Void)?, interval: Duration) {
+    init(
+        comparer: DirectoryComparer,
+        keepLevels: Bool,
+        progress: (@Sendable (FolderProgress) -> Void)?,
+        interval: Duration
+    ) {
         self.comparer = comparer
+        self.keepLevels = keepLevels
         self.progress = progress
         self.interval = interval
     }
 
-    mutating func walk(_ left: URL, _ right: URL, path: String) throws {
+    /// Compares one folder pair and everything below it, returning its counts.
+    ///
+    /// - Parameters:
+    ///   - parent: The folder row for this pair, used to prefix child IDs and paths.
+    ///   - path: This pair's path relative to the folders being checked, for progress.
+    mutating func walk(_ left: URL, _ right: URL, under parent: ComparisonRow?, path: String) throws -> FolderSummary {
+        var summary = FolderSummary()
         let leftNames: [String: String]
         let rightNames: [String: String]
         do {
@@ -134,23 +186,41 @@ private struct FolderWalker {
             rightNames = try comparer.listing(of: right)
         } catch is ComparisonError {
             summary.unreadable += 1
-            return
+            return summary
         }
 
-        for key in Set(leftNames.keys).union(rightNames.keys) {
+        let keys = Set(leftNames.keys).union(rightNames.keys)
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        var rows: [ComparisonRow] = []
+        for key in keys {
             try Task.checkCancellation()
             let leftEntry = leftNames[key].map { EntryInfo.read(name: $0, in: left) }
             let rightEntry = rightNames[key].map { EntryInfo.read(name: $0, in: right) }
-            let row = try comparer.compareEntries(id: key, left: leftEntry, right: rightEntry)
+            var row = try comparer.compareEntries(id: key, left: leftEntry, right: rightEntry)
             let childPath = path.isEmpty ? row.name : "\(path)/\(row.name)"
+            if let parent {
+                row.id = "\(parent.id)/\(row.id)"
+                row.path = "\(parent.path)/\(row.path)"
+            }
 
             if row.status == .folders, let leftEntry, let rightEntry {
-                try walk(leftEntry.url, rightEntry.url, path: childPath)
+                let child = try walk(leftEntry.url, rightEntry.url, under: row, path: childPath)
+                row.apply(child)
+                summary.merge(child)
             } else {
                 summary.add(row.status)
+                itemsCompared += 1
                 report(path: childPath, force: false)
             }
+            if keepLevels {
+                rows.append(row)
+            }
         }
+
+        if keepLevels, let parent, summary.status != .identical {
+            levels[parent.id] = rows
+        }
+        return summary
     }
 
     mutating func report(path: String, force: Bool) {
@@ -158,6 +228,6 @@ private struct FolderWalker {
         let now = ContinuousClock.now
         guard force || now - lastReport >= interval else { return }
         lastReport = now
-        progress(FolderProgress(itemsCompared: summary.itemCount, currentPath: path))
+        progress(FolderProgress(itemsCompared: itemsCompared, currentPath: path))
     }
 }

@@ -8,6 +8,7 @@ import AppKit
 ///     DIRCOMPARE_EXPAND="Documents,a/b"     folder row IDs to expand at launch
 ///     DIRCOMPARE_FILTER=differences         a RowFilter raw value
 ///     DIRCOMPARE_SEARCH=todo                text for the search field
+///     DIRCOMPARE_EXPAND_DIFFERENCES=1       run Expand Differences after the recursive check
 ///
 /// For example:
 ///
@@ -15,6 +16,10 @@ import AppKit
 enum DebugTools {
     private static var environment: [String: String] {
         ProcessInfo.processInfo.environment
+    }
+
+    static var expandsDifferences: Bool {
+        environment["DIRCOMPARE_EXPAND_DIFFERENCES"] == "1"
     }
 
     private static var initiallyExpanded: Set<String> {
