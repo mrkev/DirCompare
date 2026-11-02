@@ -467,3 +467,176 @@ struct FormattingTests {
         #expect(Set(ComparisonStatus.allCases.map(\.rank)).count == ComparisonStatus.allCases.count)
     }
 }
+
+@Suite("Recursive folder checks")
+struct FolderSummaryTests {
+    /// Builds the same small tree on both sides: a/x.txt, a/b/y.txt, z.txt
+    func mirroredTree(_ fixture: Fixture) throws {
+        for side in [Side.left, .right] {
+            try fixture.directory("a/b", in: side)
+            try fixture.file("a/x.txt", in: side, contents: "x")
+            try fixture.file("a/b/y.txt", in: side, contents: "y")
+            try fixture.file("z.txt", in: side, contents: "z")
+        }
+    }
+
+    @Test func identicalTrees() throws {
+        let fixture = try Fixture()
+        try mirroredTree(fixture)
+
+        let summary = try DirectoryComparer().summarizeFolders(fixture.left, fixture.right)
+
+        #expect(summary.identical == 3)
+        #expect(summary.itemCount == 3)
+        #expect(summary.status == .identical)
+        #expect(summary.description == "All 3 items match")
+    }
+
+    @Test func differencesDeepInTheTree() throws {
+        let fixture = try Fixture()
+        try mirroredTree(fixture)
+        try fixture.file("a/b/y.txt", in: .right, contents: "changed")
+        try fixture.file("a/b/left-only.txt", in: .left)
+        try fixture.directory("a/right-only-folder/inner", in: .right)
+        try fixture.file("a/thing", in: .left)
+        try fixture.directory("a/thing", in: .right)
+
+        let summary = try DirectoryComparer().summarizeFolders(fixture.left, fixture.right)
+
+        #expect(summary.onlyLeft == 1)
+        // A folder on one side counts once, however much is inside it.
+        #expect(summary.onlyRight == 1)
+        // y.txt, plus "thing" being a file on one side and a folder on the other.
+        #expect(summary.different == 2)
+        #expect(summary.identical == 2)
+        #expect(summary.status == .different)
+        #expect(summary.description == "1 only left, 1 only right, 2 different")
+    }
+
+    @Test func emptyFolders() throws {
+        let fixture = try Fixture()
+
+        let summary = try DirectoryComparer().summarizeFolders(fixture.left, fixture.right)
+
+        #expect(summary.itemCount == 0)
+        #expect(summary.status == .identical)
+        #expect(summary.description == "Both empty")
+    }
+
+    @Test func respectsOptions() throws {
+        let fixture = try Fixture()
+        try mirroredTree(fixture)
+        try fixture.file("a/.DS_Store", in: .left, contents: "junk")
+        try fixture.file("a/b/notes.swp", in: .right)
+        try fixture.file("a/same-size.txt", in: .left, contents: "aaa")
+        try fixture.file("a/same-size.txt", in: .right, contents: "bbb")
+
+        let options = ComparisonOptions(compareContents: false, ignorePatterns: [".DS_Store", "*.swp"])
+        let summary = try DirectoryComparer(options: options).summarizeFolders(fixture.left, fixture.right)
+
+        #expect(summary.onlyLeft == 0)
+        #expect(summary.onlyRight == 0)
+        #expect(summary.unchecked == 4)
+        #expect(summary.status == .identical)
+        #expect(summary.description == "All 4 items match, 4 not checked")
+    }
+
+    @Test func symlinkedFoldersAreNotFollowed() throws {
+        let fixture = try Fixture()
+        try mirroredTree(fixture)
+        // A link back up the tree would loop forever if followed.
+        try fixture.symlink("a/b/loop", in: .left, to: "../..")
+        try fixture.symlink("a/b/loop", in: .right, to: "../..")
+
+        let summary = try DirectoryComparer().summarizeFolders(fixture.left, fixture.right)
+
+        #expect(summary.identical == 4)
+        #expect(summary.status == .identical)
+    }
+
+    @Test func unreadableSubfolder() throws {
+        let fixture = try Fixture()
+        try mirroredTree(fixture)
+        let locked = try fixture.directory("a/b", in: .right)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+
+        let summary = try DirectoryComparer().summarizeFolders(fixture.left, fixture.right)
+
+        #expect(summary.unreadable == 1)
+        #expect(summary.identical == 2)
+        #expect(summary.status == .unreadable)
+    }
+
+    @Test func reportsFinalProgress() throws {
+        let fixture = try Fixture()
+        try mirroredTree(fixture)
+
+        let updates = FolderUpdates()
+        _ = try DirectoryComparer().summarizeFolders(fixture.left, fixture.right, progressInterval: .zero) {
+            updates.append($0)
+        }
+
+        let all = updates.all
+        #expect(all.count == 4) // One per item, plus the final report.
+        #expect(Set(all.dropLast().map(\.currentPath)) == ["a/x.txt", "a/b/y.txt", "z.txt"])
+        #expect(all.last == FolderProgress(itemsCompared: 3, currentPath: ""))
+    }
+
+    @Test func throttlesProgress() throws {
+        let fixture = try Fixture()
+        try mirroredTree(fixture)
+
+        let updates = FolderUpdates()
+        _ = try DirectoryComparer().summarizeFolders(fixture.left, fixture.right, progressInterval: .seconds(60)) {
+            updates.append($0)
+        }
+
+        #expect(updates.all == [FolderProgress(itemsCompared: 3, currentPath: "")])
+    }
+
+    @Test func cancellation() async throws {
+        let fixture = try Fixture()
+        try mirroredTree(fixture)
+        let (left, right) = (fixture.left, fixture.right)
+
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await DirectoryComparer().summarizeFoldersAsync(left, right)
+        }
+
+        await #expect(throws: CancellationError.self) {
+            try await task.value
+        }
+    }
+
+    @Test func applyingToARow() throws {
+        let fixture = try Fixture()
+        try fixture.directory("a", in: .left, modified: jan1)
+        try fixture.directory("a", in: .right, modified: feb1)
+        try fixture.file("a/f", in: .left, contents: "1")
+        try fixture.file("a/f", in: .right, contents: "2")
+        let result = try fixture.compare()
+        var row = try #require(result.row("a"))
+        #expect(row.status == .folders)
+
+        row.apply(try DirectoryComparer().summarizeFolders(row.left!.url, row.right!.url))
+
+        #expect(row.status == .different)
+        #expect(row.note == "1 different")
+        #expect(row.folderSummary?.different == 1)
+        #expect(row.isDifference)
+    }
+}
+
+final class FolderUpdates: @unchecked Sendable {
+    private let lock = NSLock()
+    private var updates: [FolderProgress] = []
+
+    func append(_ update: FolderProgress) {
+        lock.withLock { updates.append(update) }
+    }
+
+    var all: [FolderProgress] {
+        lock.withLock { updates }
+    }
+}

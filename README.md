@@ -47,6 +47,12 @@ as files to open.)
   copy shows first; use the arrow keys to flip to the right copy.
 - ⇧⌘C copies the visible rows as a Markdown table.
 - **Ignore** takes comma-separated names or wildcards, like `.DS_Store, *.swp`.
+- **Check folders recursively** (off by default): after the top-level results
+  appear, each folder that exists on both sides is compared all the way down,
+  one at a time in the background. Its row turns *Identical* or *Different*,
+  with a summary such as "3 only left, 2 different" next to the name. A folder
+  that exists on only one side counts as one item, however much it contains.
+  ⌘. stops the check; folders not yet checked keep their date-only status.
 
 ## Notes
 

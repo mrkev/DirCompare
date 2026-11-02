@@ -52,8 +52,10 @@ public struct ComparisonRow: Sendable, Hashable, Identifiable {
     /// Which side was modified later, or `nil` when the dates match within tolerance
     /// or the entry exists on only one side.
     public var newer: Side?
-    /// Extra detail, such as symlink targets or a read error.
+    /// Extra detail, such as symlink targets, a read error, or a folder summary.
     public var note: String?
+    /// Set once a folder pair's contents have been checked recursively.
+    public var folderSummary: FolderSummary?
 
     public init(
         id: String,

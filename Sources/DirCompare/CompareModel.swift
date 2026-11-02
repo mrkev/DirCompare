@@ -34,7 +34,8 @@ enum RowFilter: String, CaseIterable, Identifiable {
         case .onlyRight: row.status == .onlyRight
         case .different: row.status == .different || row.status == .kindMismatch
         case .identical: row.status == .identical
-        case .folders: row.status == .folders
+        // Folders on both sides, whether or not their contents have been checked.
+        case .folders: row.bothAreFolders
         }
     }
 }
@@ -48,12 +49,32 @@ final class CompareModel {
 
     var includeHidden: Bool
     var compareContents: Bool
+    /// After the top-level comparison, check folders on both sides all the way down.
+    var checkFoldersRecursively: Bool
     var ignoreText: String
 
     private(set) var result: DirectoryComparison?
     private(set) var isComparing = false
     private(set) var progress: ComparisonProgress?
     private(set) var errorMessage: String?
+    /// Progress of the recursive folder checks, or `nil` when none are running.
+    private(set) var folderCheck: FolderCheck?
+
+    struct FolderCheck {
+        /// Folder rows not yet checked, including the current one.
+        var pending: Set<ComparisonRow.ID>
+        var current: ComparisonRow.ID?
+        var currentName = ""
+        var completed = 0
+        let total: Int
+        /// Progress within the current folder pair.
+        var progress: FolderProgress?
+    }
+
+    /// Whether anything is running that Stop would cancel.
+    var isBusy: Bool {
+        isComparing || folderCheck != nil
+    }
 
     var filter: RowFilter = .all
     var searchText = ""
@@ -71,6 +92,7 @@ final class CompareModel {
     init() {
         includeHidden = defaults.object(forKey: Keys.includeHidden) as? Bool ?? true
         compareContents = defaults.object(forKey: Keys.compareContents) as? Bool ?? true
+        checkFoldersRecursively = defaults.bool(forKey: Keys.checkFoldersRecursively)
         ignoreText = defaults.string(forKey: Keys.ignore) ?? ""
 
         // Folders passed at launch (`open DirCompare.app --args -left A -right B`) take priority.
@@ -147,6 +169,8 @@ final class CompareModel {
         isComparing = true
         errorMessage = nil
         progress = nil
+        folderCheck = nil
+        let checkFolders = checkFoldersRecursively
 
         // The task runs on the main actor; the comparison itself runs in the background.
         task = Task {
@@ -175,7 +199,48 @@ final class CompareModel {
             }
             isComparing = false
             progress = nil
+
+            if checkFolders {
+                await checkFoldersRecursively(options: options, generation: current)
+            }
         }
+    }
+
+    /// Checks each folder pair in the current result, one at a time, updating rows as they finish.
+    /// The top-level results are already showing, so this only fills in folder statuses.
+    private func checkFoldersRecursively(options: ComparisonOptions, generation current: Int) async {
+        guard let folders = result?.rows.filter(\.bothAreFolders), !folders.isEmpty else { return }
+        folderCheck = FolderCheck(pending: Set(folders.map(\.id)), total: folders.count)
+        let comparer = DirectoryComparer(options: options)
+
+        for row in folders {
+            guard generation == current, let left = row.left?.url, let right = row.right?.url else { return }
+            folderCheck?.current = row.id
+            folderCheck?.currentName = row.name
+            folderCheck?.progress = nil
+
+            let summary: FolderSummary
+            do {
+                summary = try await comparer.summarizeFoldersAsync(left, right) { update in
+                    Task { @MainActor in
+                        if self.generation == current, self.folderCheck?.current == row.id {
+                            self.folderCheck?.progress = update
+                        }
+                    }
+                }
+            } catch {
+                // Only cancellation can get here: unreadable folders are counted, not thrown.
+                return
+            }
+
+            guard generation == current else { return }
+            if let index = result?.rows.firstIndex(where: { $0.id == row.id }) {
+                result?.rows[index].apply(summary)
+            }
+            folderCheck?.pending.remove(row.id)
+            folderCheck?.completed += 1
+        }
+        folderCheck = nil
     }
 
     func cancel() {
@@ -183,12 +248,14 @@ final class CompareModel {
         generation += 1
         isComparing = false
         progress = nil
+        folderCheck = nil
     }
 
     /// Saves the options and compares again.
     func optionsChanged() {
         defaults.set(includeHidden, forKey: Keys.includeHidden)
         defaults.set(compareContents, forKey: Keys.compareContents)
+        defaults.set(checkFoldersRecursively, forKey: Keys.checkFoldersRecursively)
         defaults.set(ignoreText, forKey: Keys.ignore)
         compare()
     }
@@ -259,6 +326,7 @@ final class CompareModel {
         static let right = "rightFolder"
         static let includeHidden = "includeHidden"
         static let compareContents = "compareContents"
+        static let checkFoldersRecursively = "checkFoldersRecursively"
         static let ignore = "ignorePatterns"
     }
 

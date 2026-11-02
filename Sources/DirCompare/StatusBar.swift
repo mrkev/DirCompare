@@ -45,7 +45,7 @@ struct StatusBar: View {
         chip(.onlyRight, count: result.count(.onlyRight), status: .onlyRight)
         chip(.different, count: result.count(.different) + result.count(.kindMismatch), status: .different)
         chip(.identical, count: result.count(.identical), status: .identical)
-        chip(.folders, count: result.count(.folders), status: .folders)
+        chip(.folders, count: result.rows.count(where: \.bothAreFolders), status: .folders)
         if result.count(.unreadable) > 0 {
             Label("\(result.count(.unreadable)) unreadable", systemImage: ComparisonStatus.unreadable.symbol)
                 .foregroundStyle(.secondary)
@@ -57,10 +57,35 @@ struct StatusBar: View {
 
         Spacer()
 
-        let shown = model.visibleRows.count
-        Text(shown == result.rows.count ? "\(shown) items" : "Showing \(shown) of \(result.rows.count)")
-            .foregroundStyle(.secondary)
-            .monospacedDigit()
+        if let check = model.folderCheck {
+            folderCheckProgress(check)
+        } else {
+            let shown = model.visibleRows.count
+            Text(shown == result.rows.count ? "\(shown) items" : "Showing \(shown) of \(result.rows.count)")
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+    }
+
+    /// "Checking folder 3 of 25: Library — 12,345 items (Caches/…/file)"
+    @ViewBuilder
+    private func folderCheckProgress(_ check: CompareModel.FolderCheck) -> some View {
+        ProgressView(value: Double(check.completed), total: Double(check.total))
+            .frame(width: 80)
+        Group {
+            if let progress = check.progress {
+                Text("Checking folder \(check.completed + 1) of \(check.total): \(check.currentName), \(progress.itemsCompared.formatted()) items")
+                    .help(progress.currentPath)
+            } else {
+                Text("Checking folder \(check.completed + 1) of \(check.total): \(check.currentName)")
+            }
+        }
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .foregroundStyle(.secondary)
+        .monospacedDigit()
+        Button("Stop", action: model.cancel)
+            .controlSize(.small)
     }
 
     private func chip(_ filter: RowFilter, count: Int, status: ComparisonStatus) -> some View {

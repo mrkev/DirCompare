@@ -15,7 +15,18 @@ struct ResultsTable: View {
             .width(min: 160, ideal: 260)
 
             TableColumn("Status", value: \.statusRank) { row in
-                StatusBadge(status: row.status)
+                if model.folderCheck?.current == row.id {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        Text("Checking…")
+                    }
+                    .foregroundStyle(.secondary)
+                } else if model.folderCheck?.pending.contains(row.id) == true {
+                    Label("Waiting", systemImage: "clock")
+                        .foregroundStyle(.secondary)
+                } else {
+                    StatusBadge(status: row.status)
+                }
             }
             .width(min: 90, ideal: 110)
 
@@ -108,7 +119,7 @@ struct NameCell: View {
             Text(row.name)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            if let note = row.note, row.kind == .symlink {
+            if let note = row.note, row.kind == .symlink || row.folderSummary != nil {
                 Text(note)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

@@ -42,7 +42,7 @@ struct ContentView: View {
                 .keyboardShortcut("s", modifiers: [.command, .shift])
                 .help("Swap left and right (⇧⌘S)")
 
-            if model.isComparing {
+            if model.isBusy {
                 Button("Stop", systemImage: "xmark", action: model.cancel)
                     .keyboardShortcut(".", modifiers: .command)
                     .help("Stop comparing (⌘.)")
@@ -172,6 +172,8 @@ struct OptionsBar: View {
                 .help("Include names that start with a dot")
             Toggle("Compare contents", isOn: $model.compareContents)
                 .help("Compare same-size files byte by byte. When off, only sizes are compared.")
+            Toggle("Check folders recursively", isOn: $model.checkFoldersRecursively)
+                .help("After comparing this level, check folders that exist on both sides all the way down. Can be slow for big folders.")
 
             HStack(spacing: 6) {
                 Text("Ignore")
@@ -189,5 +191,6 @@ struct OptionsBar: View {
         .padding(.vertical, 6)
         .onChange(of: model.includeHidden) { model.optionsChanged() }
         .onChange(of: model.compareContents) { model.optionsChanged() }
+        .onChange(of: model.checkFoldersRecursively) { model.optionsChanged() }
     }
 }
