@@ -32,7 +32,8 @@ struct ResultsTable: View {
                 } else if model.folderCheck?.pending.contains(row.id) == true {
                     Label("Waiting", systemImage: "clock")
                         .foregroundStyle(.secondary)
-                } else {
+                } else if !model.isExpanded(row.id) {
+                    // An expanded folder's contents show their own statuses.
                     StatusBadge(status: row.status)
                 }
             }
