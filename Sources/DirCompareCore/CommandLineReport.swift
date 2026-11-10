@@ -55,6 +55,8 @@ public struct CommandLineReport {
     public var showAll = false
     /// The most rows to list. `nil` lists them all.
     public var limit: Int? = 200
+    /// Stop at the first item that differs, for when only the exit code matters.
+    public var stopAtFirstDifference = false
     /// For dates in Markdown output. Text and JSON use UTC.
     public var timeZone: TimeZone = .current
 
@@ -70,6 +72,8 @@ public struct CommandLineReport {
         public var listed: Int
         /// Rows that would have been listed but for the limit.
         public var omitted: Int
+        /// Whether `stopAtFirstDifference` cut the comparison short, leaving the counts partial.
+        public var stoppedEarly = false
 
         /// Like `diff`: 0 when nothing differs, 1 when something does, and 2 when
         /// something couldn't be read, so the answer may be incomplete.
@@ -104,30 +108,45 @@ public struct CommandLineReport {
             MarkdownExport.header(left: left, right: right).forEach(write)
         }
 
-        func emit(_ row: ComparisonRow) {
+        /// Lists `row` if it should be, then throws `StopComparing` if it's where to stop.
+        func emit(_ row: ComparisonRow) throws {
             let unexplored = scope == .shallow && row.status == .folders
-            guard showAll || unexplored || row.isDifference else { return }
-            if let limit, outcome.listed >= limit {
-                outcome.omitted += 1
-                return
+            if showAll || unexplored || row.isDifference {
+                if let limit, outcome.listed >= limit {
+                    outcome.omitted += 1
+                } else {
+                    outcome.listed += 1
+                    switch format {
+                    case .text: write(textLine(row))
+                    case .json: write(jsonLine(row))
+                    case .markdown:
+                        writeMarkdownHeader()
+                        write(MarkdownExport.line(for: row, timeZone: timeZone))
+                    }
+                }
             }
-            outcome.listed += 1
-            switch format {
-            case .text: write(textLine(row))
-            case .json: write(jsonLine(row))
-            case .markdown:
-                writeMarkdownHeader()
-                write(MarkdownExport.line(for: row, timeZone: timeZone))
+            if stopAtFirstDifference && Self.differs(row.status) {
+                throw StopComparing()
             }
         }
 
         switch scope {
         case .recursive:
-            outcome.summary = try comparer.walk(leftBase, rightBase, under: parent, progress: progress, visit: emit)
+            // The walk only returns its counts if it finishes, so keep a tally for stopping early.
+            var counted = FolderSummary()
+            do {
+                outcome.summary = try comparer.walk(leftBase, rightBase, under: parent, progress: progress) { row in
+                    counted.add(row.status)
+                    try emit(row)
+                }
+            } catch is StopComparing {
+                outcome.summary = counted
+                outcome.stoppedEarly = true
+            }
 
         case .shallow, .summary:
             let comparison = try comparer.compare(leftBase, rightBase, under: parent)
-            for var row in comparison.rows {
+            rows: for var row in comparison.rows {
                 if row.status == .folders, let left = row.left?.url, let right = row.right?.url {
                     if scope == .shallow {
                         outcome.foldersNotCompared += 1
@@ -145,7 +164,12 @@ public struct CommandLineReport {
                 } else {
                     outcome.summary.add(row.status)
                 }
-                emit(row)
+                do {
+                    try emit(row)
+                } catch is StopComparing {
+                    outcome.stoppedEarly = true
+                    break rows
+                }
             }
         }
 
@@ -154,6 +178,17 @@ public struct CommandLineReport {
             write(line)
         }
         return outcome
+    }
+
+    private struct StopComparing: Error {}
+
+    /// Whether a row's status makes the folders differ, as opposed to being unknown
+    /// (`unreadable`, `not-checked`) or matching.
+    static func differs(_ status: ComparisonStatus) -> Bool {
+        switch status {
+        case .onlyLeft, .onlyRight, .different, .kindMismatch: true
+        case .unreadable, .unchecked, .folders, .identical: false
+        }
     }
 
     /// The folders to compare, and the row to prefix paths with when comparing a subfolder.
@@ -219,6 +254,9 @@ public struct CommandLineReport {
     }
 
     func summaryText(_ outcome: Outcome) -> String {
+        if outcome.stoppedEarly {
+            return "stopped at the first difference (--first)"
+        }
         let folders = outcome.foldersNotCompared
         guard folders > 0 else { return outcome.summary.description }
         let notCompared = "\(folders) folder\(folders == 1 ? "" : "s") not compared; look inside with --under PATH"
@@ -284,6 +322,8 @@ public struct CommandLineReport {
         var description: String
         var listed: Int
         var omitted: Int
+        /// True when `--first` stopped the comparison, so the counts are partial.
+        var stoppedEarly: Bool
         var exitCode: Int32
     }
 
@@ -322,6 +362,7 @@ public struct CommandLineReport {
             description: summaryText(outcome),
             listed: outcome.listed,
             omitted: outcome.omitted,
+            stoppedEarly: outcome.stoppedEarly,
             exitCode: outcome.exitCode
         ))
     }

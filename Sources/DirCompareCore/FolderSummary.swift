@@ -125,7 +125,8 @@ extension DirectoryComparer {
 
     /// Compares two folders recursively, calling `visit` with each row as it's found, in
     /// path order. Folder pairs are descended into rather than visited, unless one couldn't
-    /// be read; then it's visited as `unreadable`, with the reason as its note.
+    /// be read; then it's visited as `unreadable`, with the reason as its note. An error
+    /// thrown by `visit` stops the walk and is rethrown.
     ///
     /// Unlike `summarizeFolders`, throws if `left` or `right` itself can't be read.
     ///
@@ -139,7 +140,7 @@ extension DirectoryComparer {
         under parent: ComparisonRow? = nil,
         progressInterval: Duration = .milliseconds(100),
         progress: (@Sendable (FolderProgress) -> Void)? = nil,
-        visit: (ComparisonRow) -> Void
+        visit: (ComparisonRow) throws -> Void
     ) throws -> FolderSummary {
         // The walker keeps the visitor only until it returns.
         try withoutActuallyEscaping(visit) { visit in
@@ -184,7 +185,7 @@ private struct FolderWalker {
     let progress: (@Sendable (FolderProgress) -> Void)?
     let interval: Duration
 
-    var visit: ((ComparisonRow) -> Void)?
+    var visit: ((ComparisonRow) throws -> Void)?
     var levels: [ComparisonRow.ID: [ComparisonRow]] = [:]
     var itemsCompared = 0
     var lastReport = ContinuousClock.now
@@ -254,12 +255,12 @@ private struct FolderWalker {
                     row.apply(child)
                     row.note = error.localizedDescription
                     summary.merge(child)
-                    visit?(row)
+                    try visit?(row)
                 }
             } else {
                 summary.add(row.status)
                 itemsCompared += 1
-                visit?(row)
+                try visit?(row)
                 report(path: childPath, force: false)
             }
             if keepLevels {

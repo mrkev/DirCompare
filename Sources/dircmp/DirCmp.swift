@@ -28,12 +28,15 @@ struct DirCmp: ParsableCommand {
             on its own isn't a difference: files with the same bytes are identical.
 
             Output stops after --limit items and says how many more there were. For a \
-            large tree, start with --summary, then look inside one folder with --under.
+            large tree, start with --summary, then look inside one folder with --under. \
+            To learn only whether two folders match, --first stops at the first \
+            difference.
 
             --format json writes one JSON object per line: a "row" record per item \
             (relative path, status, newer side, and for each side its absolute path, \
             kind, size in bytes and ISO 8601 modification date), then one "summary" \
-            record with counts, "listed", "omitted" and "exitCode". The "schema" field \
+            record with counts, "listed", "omitted", "stoppedEarly" and "exitCode". The \
+            "schema" field \
             changes if the format changes incompatibly.
 
             Exit status: 0 if nothing differs, 1 if something does, 2 if something \
@@ -43,6 +46,7 @@ struct DirCmp: ParsableCommand {
             Examples:
               dircmp ~/Photos /Volumes/Backup/Photos
               dircmp a b --summary
+              dircmp a b --first > /dev/null && echo same
               dircmp a b --under docs/notes --all
               dircmp a b --json --limit 0 | jq -r 'select(.status=="only-left").left.path'
               dircmp a b --ignore '.DS_Store, *.swp' --no-contents
@@ -66,6 +70,9 @@ struct DirCmp: ParsableCommand {
 
     @Flag(help: "List the items directly inside the folders, with each folder pair checked all the way down and shown with its counts.")
     var summary = false
+
+    @Flag(help: "Stop at the first difference: list it and exit 1. Faster on large trees when you only need to know whether the folders match.")
+    var first = false
 
     @Flag(name: [.short, .long], help: "List identical items too, not only differences.")
     var all = false
@@ -125,6 +132,7 @@ struct DirCmp: ParsableCommand {
         report.format = json ? .json : format
         report.showAll = all
         report.limit = limit == 0 ? nil : limit
+        report.stopAtFirstDifference = first
 
         let status = StatusLine()
         let outcome: CommandLineReport.Outcome

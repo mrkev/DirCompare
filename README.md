@@ -83,7 +83,9 @@ Summary: 1 only left, 1 different
   compares one level, like the app without the recursive check. It always lists
   folder pairs, so you can look inside one with `--under PATH --shallow`, like
   expanding a row in the app.
-- Only differences are listed; `--all` adds identical items.
+- Only differences are listed; `--all` adds identical items. `--first` stops at
+  the first difference, for when you only need to know whether two folders
+  match (`dircmp a b --first > /dev/null && echo same`).
 - Output stops after 200 items (`--limit`, 0 for no limit) and says how many
   more there were. For a big tree, survey it with `--summary` (one line per
   top-level item, with counts for each folder), then look inside one folder

@@ -861,6 +861,21 @@ struct WalkTests {
         #expect(summary.unreadable == 1)
     }
 
+    @Test func errorFromTheVisitorStopsTheWalk() throws {
+        struct Stop: Error {}
+        let fixture = try Fixture()
+        try tree(fixture)
+
+        var visited: [String] = []
+        #expect(throws: Stop.self) {
+            try DirectoryComparer().walk(fixture.left, fixture.right) { row in
+                visited.append(row.path)
+                if row.status == .onlyRight { throw Stop() }
+            }
+        }
+        #expect(visited == ["a/b/c.txt", "a/new.txt"])
+    }
+
     @Test func unreadableRootThrows() throws {
         let fixture = try Fixture()
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fixture.right.path)
@@ -1028,6 +1043,53 @@ struct CommandLineReportTests {
         #expect(outcome.exitCode == 2)
     }
 
+    @Test func firstStopsAtTheFirstDifference() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+
+        let (lines, outcome) = try run(report(fixture) { $0.stopAtFirstDifference = true; $0.showAll = true })
+
+        #expect(lines == [
+            "different    docs/a.md  (3 → 5 bytes; right newer)",
+            "Summary: stopped at the first difference (--first)",
+        ])
+        #expect(outcome.stoppedEarly)
+        #expect(outcome.summary.different == 1)
+        #expect(outcome.summary.itemCount == 1)
+        #expect(outcome.exitCode == 1)
+    }
+
+    @Test func firstKeepsGoingPastUnknowns() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+
+        // docs/ and lib/ haven't been looked inside, which doesn't make them differ.
+        let (lines, outcome) = try run(report(fixture) {
+            $0.scope = .shallow
+            $0.stopAtFirstDifference = true
+        })
+
+        #expect(lines == [
+            "folders      docs/",
+            "folders      lib/",
+            "only-right   top.txt  (3 bytes)",
+            "Summary: stopped at the first difference (--first)",
+        ])
+        #expect(outcome.stoppedEarly)
+    }
+
+    @Test func firstFinishesWhenNothingDiffers() throws {
+        let fixture = try Fixture()
+        try fixture.file("same.txt", in: .left, contents: "s")
+        try fixture.file("same.txt", in: .right, contents: "s")
+
+        let (lines, outcome) = try run(report(fixture) { $0.stopAtFirstDifference = true })
+
+        #expect(lines == ["Summary: The 1 item matches"])
+        #expect(!outcome.stoppedEarly)
+        #expect(outcome.exitCode == 0)
+    }
+
     @Test func jsonRecords() throws {
         let fixture = try Fixture()
         try tree(fixture)
@@ -1054,6 +1116,7 @@ struct CommandLineReportTests {
         #expect(summary["listed"] as? Int == 1)
         #expect(summary["omitted"] as? Int == 2)
         #expect(summary["exitCode"] as? Int == 1)
+        #expect(summary["stoppedEarly"] as? Bool == false)
         #expect((summary["counts"] as? [String: Int])?["onlyLeft"] == 1)
     }
 
