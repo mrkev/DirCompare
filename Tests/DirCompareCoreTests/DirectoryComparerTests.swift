@@ -805,3 +805,263 @@ struct FolderCheckTests {
         #expect(updates.all.last?.itemsCompared == 3)
     }
 }
+
+@Suite("Walking folders")
+struct WalkTests {
+    /// a/b/c.txt  different
+    /// a/new.txt  only right
+    /// a/same.txt identical
+    /// z.txt      only left
+    func tree(_ fixture: Fixture) throws {
+        for side in [Side.left, .right] {
+            try fixture.directory("a/b", in: side)
+            try fixture.file("a/same.txt", in: side, contents: "s")
+        }
+        try fixture.file("a/b/c.txt", in: .left, contents: "left")
+        try fixture.file("a/b/c.txt", in: .right, contents: "right!")
+        try fixture.file("a/new.txt", in: .right)
+        try fixture.file("z.txt", in: .left)
+    }
+
+    @Test func visitsEveryItemInPathOrder() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+
+        var visited: [ComparisonRow] = []
+        let summary = try DirectoryComparer().walk(fixture.left, fixture.right) { visited.append($0) }
+
+        #expect(visited.map(\.path) == ["a/b/c.txt", "a/new.txt", "a/same.txt", "z.txt"])
+        #expect(visited.map(\.status) == [.different, .onlyRight, .identical, .onlyLeft])
+        #expect(try summary == DirectoryComparer().summarizeFolders(fixture.left, fixture.right))
+    }
+
+    @Test func prefixesPathsUnderAParent() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+        let a = try #require(try fixture.compare().row("a"))
+
+        var paths: [String] = []
+        _ = try DirectoryComparer().walk(a.left!.url, a.right!.url, under: a) { paths.append($0.path) }
+
+        #expect(paths == ["a/b/c.txt", "a/new.txt", "a/same.txt"])
+    }
+
+    @Test func unreadableSubfolderIsVisitedWithItsReason() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+        let locked = fixture.right.appendingPathComponent("a/b")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+
+        var visited: [ComparisonRow] = []
+        let summary = try DirectoryComparer().walk(fixture.left, fixture.right) { visited.append($0) }
+
+        let b = try #require(visited.first { $0.path == "a/b" })
+        #expect(b.status == .unreadable)
+        #expect(b.note?.contains("a/b") == true)
+        #expect(summary.unreadable == 1)
+    }
+
+    @Test func unreadableRootThrows() throws {
+        let fixture = try Fixture()
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: fixture.right.path)
+
+        #expect(throws: ComparisonError.self) {
+            try DirectoryComparer().walk(fixture.left, fixture.right) { _ in }
+        }
+    }
+}
+
+@Suite("Command-line report")
+struct CommandLineReportTests {
+    /// docs/a.md     different (3 → 5 bytes)
+    /// docs/same.md  identical
+    /// docs/x.md     only left
+    /// lib/          identical folder
+    /// lib/l.txt     identical
+    /// top.txt       only right
+    func tree(_ fixture: Fixture) throws {
+        for side in [Side.left, .right] {
+            try fixture.directory("docs", in: side)
+            try fixture.directory("lib", in: side)
+            try fixture.file("docs/same.md", in: side, contents: "same", modified: jan1)
+            try fixture.file("lib/l.txt", in: side, contents: "l", modified: jan1)
+        }
+        try fixture.file("docs/a.md", in: .left, contents: "old", modified: jan1)
+        try fixture.file("docs/a.md", in: .right, contents: "newer", modified: feb1)
+        try fixture.file("docs/x.md", in: .left)
+        try fixture.file("top.txt", in: .right, contents: "top")
+    }
+
+    func run(_ report: CommandLineReport) throws -> ([String], CommandLineReport.Outcome) {
+        var lines: [String] = []
+        let outcome = try report.run(comparer: DirectoryComparer()) { lines.append($0) }
+        return (lines, outcome)
+    }
+
+    func report(_ fixture: Fixture, _ configure: (inout CommandLineReport) -> Void = { _ in }) -> CommandLineReport {
+        var report = CommandLineReport(left: fixture.left, right: fixture.right)
+        configure(&report)
+        return report
+    }
+
+    @Test func listsDifferencesAllTheWayDown() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+
+        let (lines, outcome) = try run(report(fixture))
+
+        #expect(lines == [
+            "different    docs/a.md  (3 → 5 bytes; right newer)",
+            "only-left    docs/x.md  (0 bytes)",
+            "only-right   top.txt  (3 bytes)",
+            "Summary: 1 only left, 1 only right, 1 different",
+        ])
+        #expect(outcome.exitCode == 1)
+    }
+
+    @Test func showAllIncludesIdenticalItems() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+
+        let (lines, _) = try run(report(fixture) { $0.showAll = true })
+
+        #expect(lines.count == 6)
+        #expect(lines.contains("identical    lib/l.txt  (1 byte)"))
+    }
+
+    @Test func identicalFoldersExitZero() throws {
+        let fixture = try Fixture()
+        try fixture.file("same.txt", in: .left, contents: "s")
+        try fixture.file("same.txt", in: .right, contents: "s")
+
+        let (lines, outcome) = try run(report(fixture))
+
+        #expect(lines == ["Summary: The 1 item matches"])
+        #expect(outcome.exitCode == 0)
+    }
+
+    @Test func limitCountsTheRest() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+
+        let (lines, outcome) = try run(report(fixture) { $0.limit = 1 })
+
+        #expect(lines.count == 3)
+        #expect(lines[1].hasPrefix("… 2 more not listed."))
+        #expect(outcome.listed == 1)
+        #expect(outcome.omitted == 2)
+        #expect(outcome.exitCode == 1)
+    }
+
+    @Test func underKeepsPathsRelativeToTheRoots() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+
+        let (lines, _) = try run(report(fixture) { $0.under = "docs/" })
+
+        #expect(lines.first?.contains(" docs/a.md ") == true)
+        #expect(lines.last == "Summary: 1 only left, 1 different")
+    }
+
+    @Test func underAMissingFolderThrows() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+
+        #expect(throws: ComparisonError.self) {
+            try run(report(fixture) { $0.under = "nope" })
+        }
+    }
+
+    @Test func shallowListsFoldersByDateOnly() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+
+        let (lines, outcome) = try run(report(fixture) { $0.scope = .shallow })
+
+        #expect(lines == [
+            "only-right   top.txt  (3 bytes)",
+            "Summary: 1 only right, 2 folders not compared (--shallow)",
+        ])
+        #expect(outcome.foldersNotCompared == 2)
+    }
+
+    @Test func summaryChecksEachFolder() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+
+        let (lines, _) = try run(report(fixture) { $0.scope = .summary; $0.showAll = true })
+
+        #expect(lines.count == 4)
+        #expect(lines[0].hasPrefix("different    docs/  ("))
+        #expect(lines[0].hasSuffix("1 only left, 1 different)"))
+        #expect(lines[1].hasSuffix("The 1 item matches)"))
+        #expect(lines[3] == "Summary: 1 only left, 1 only right, 1 different")
+    }
+
+    @Test func unreadableFolderExitsTwo() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+        let locked = fixture.right.appendingPathComponent("docs")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+
+        let (lines, outcome) = try run(report(fixture))
+
+        #expect(lines.first?.hasPrefix("unreadable   docs/  (") == true)
+        #expect(outcome.exitCode == 2)
+    }
+
+    @Test func jsonRecords() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+
+        let (lines, _) = try run(report(fixture) { $0.format = .json; $0.limit = 1 })
+        let records = try lines.map {
+            try #require(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any])
+        }
+
+        #expect(records.count == 2)
+        let row = records[0]
+        #expect(row["type"] as? String == "row")
+        #expect(row["path"] as? String == "docs/a.md")
+        #expect(row["status"] as? String == "different")
+        #expect(row["newer"] as? String == "right")
+        let left = try #require(row["left"] as? [String: Any])
+        #expect(left["size"] as? Int == 3)
+        #expect(left["modified"] as? String == "2026-01-01T00:00:00Z")
+        #expect((left["path"] as? String)?.hasSuffix("/left/docs/a.md") == true)
+
+        let summary = records[1]
+        #expect(summary["type"] as? String == "summary")
+        #expect(summary["schema"] as? Int == 1)
+        #expect(summary["listed"] as? Int == 1)
+        #expect(summary["omitted"] as? Int == 2)
+        #expect(summary["exitCode"] as? Int == 1)
+        #expect((summary["counts"] as? [String: Int])?["onlyLeft"] == 1)
+    }
+
+    @Test func jsonSummaryScopeIncludesCounts() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+
+        let (lines, _) = try run(report(fixture) { $0.format = .json; $0.scope = .summary })
+        let docs = try #require(JSONSerialization.jsonObject(with: Data(lines[0].utf8)) as? [String: Any])
+
+        #expect(docs["path"] as? String == "docs")
+        #expect((docs["counts"] as? [String: Int])?["different"] == 1)
+        let left = try #require(docs["left"] as? [String: Any])
+        #expect(left["size"] == nil)
+        #expect((left["path"] as? String)?.hasSuffix("/left/docs") == true)
+    }
+
+    @Test func markdownTableThenSummary() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+
+        let (lines, _) = try run(report(fixture) { $0.format = .markdown })
+
+        #expect(lines.count == 3)
+        #expect(lines[0].contains("| docs/a.md | Different |"))
+        #expect(lines[1] == "")
+        #expect(lines[2].hasPrefix("Summary: "))
+    }
+}

@@ -6,11 +6,13 @@ what it does from a user's point of view.
 ## Commands
 
 ```sh
-swift build                      # debug build
-swift test                       # Swift Testing suite (core library only)
-scripts/build-app.sh             # release build → build/DirCompare.app (ad-hoc signed)
-scripts/build-app.sh --install   # also copy to ~/Applications
-scripts/build-app.sh --open      # also launch it
+swift build                         # debug build
+swift test                          # Swift Testing suite (core library only)
+scripts/build-app.sh                # release build → build/DirCompare.app (ad-hoc signed) + build/dircmp
+scripts/build-app.sh --install      # also copy the app to ~/Applications
+scripts/build-app.sh --install-cli  # also copy dircmp to ~/.local/bin
+scripts/build-app.sh --open         # also launch the app
+.build/debug/dircmp L R             # try the CLI after `swift build`
 ```
 
 Requires Xcode, not just the Command Line Tools: the code uses Swift 6.2
@@ -24,7 +26,12 @@ Requires Xcode, not just the Command Line Tools: the code uses Swift 6.2
     folder row being expanded so child rows get prefixed IDs and paths.
   - `FolderSummary.swift` has the recursive walker. `checkFolder(_:)` returns a
     summary plus the rows of every folder that differs (`levels`); folders whose
-    contents all match aren't kept, to save memory.
+    contents all match aren't kept, to save memory. `walk(_:_:visit:)` streams
+    every row instead, for the CLI.
+  - `CommandLineReport.swift` is everything `dircmp` prints (text, JSON,
+    Markdown), the limit, and the exit code.
+- `Sources/dircmp`: the command-line tool. Argument parsing only
+  (swift-argument-parser, the package's one dependency); logic goes in Core.
 - `Sources/DirCompare`: the app. `CompareModel` is the per-window state; views
   are thin.
 - `Tests/DirCompareCoreTests`: one file, grouped into suites. `Fixture` builds
@@ -61,6 +68,17 @@ Requires Xcode, not just the Command Line Tools: the code uses Swift 6.2
 - Dates within 2 seconds count as equal (FAT/exFAT resolution).
 - Add tests for core changes. Tests use real temporary folders, not mocks.
 - Keep the README's "Using it" section in sync with user-visible changes.
+
+## The CLI is for agents too
+
+`dircmp`'s output is an interface that scripts and agents parse, so:
+
+- `--help` is the documentation agents read first. Keep its status list,
+  examples and exit codes accurate.
+- Bump `CommandLineReport.schemaVersion` when a JSON change could break a
+  reader (renamed or removed fields, changed meanings). Adding fields is fine.
+- Keep output bounded by default (`--limit`) and streamed a line at a time.
+- Status tokens (`only-left`, …) are shared by text and JSON; don't rename them.
 
 ## Checking the UI
 

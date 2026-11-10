@@ -2,17 +2,19 @@
 
 A small macOS app that compares two folders side by side, without recursing:
 which names exist on only one side, and for names on both sides whether the
-contents match and which copy is newer.
+contents match and which copy is newer. A command-line tool, `dircmp`, does the
+same comparison all the way down, for scripts and agents.
 
 ## Build and run
 
 Requires Xcode (Swift 6.2) and macOS 14 or later.
 
 ```sh
-scripts/build-app.sh            # builds build/DirCompare.app
-scripts/build-app.sh --install  # also copies it to ~/Applications
-scripts/build-app.sh --open     # also launches it
-swift test                      # runs the comparison tests
+scripts/build-app.sh                # builds build/DirCompare.app and build/dircmp
+scripts/build-app.sh --install      # also copies the app to ~/Applications
+scripts/build-app.sh --install-cli  # also copies dircmp to ~/.local/bin
+scripts/build-app.sh --open         # also launches the app
+swift test                          # runs the comparison tests
 ```
 
 To open the app on two folders from a terminal:
@@ -63,6 +65,33 @@ as files to open.)
   to every difference; **Collapse All** is ⇧⌘E. To save memory, folders whose
   contents all match keep only their summary and are re-read if you expand them.
 
+## Command line
+
+`dircmp LEFT RIGHT` lists what differs, one line per item, all the way down,
+and exits like `diff`: 0 if nothing differs, 1 if something does, 2 if
+something couldn't be read. `dircmp --help` explains every status and option.
+
+```sh
+dircmp ~/Photos /Volumes/Backup/Photos
+different    2024/trip/IMG_0412.HEIC  (2,811,904 → 2,811,520 bytes; right newer)
+only-left    2024/trip/IMG_0413.HEIC  (3,102,208 bytes)
+Summary: 1 only left, 1 different
+```
+
+- It compares the same way as the app (same statuses, ignore patterns, date
+  tolerance and Unicode name matching), but recursively by default. `--shallow`
+  compares one level, like the app without the recursive check.
+- Only differences are listed; `--all` adds identical items.
+- Output stops after 200 items (`--limit`, 0 for no limit) and says how many
+  more there were. For a big tree, survey it with `--summary` (one line per
+  top-level item, with counts for each folder), then look inside one folder
+  with `--under PATH`. Paths stay relative to the folders you passed.
+- `--json` writes one object per line: a `row` record per item, with absolute
+  paths, exact sizes and ISO 8601 dates for each side, then a `summary` record.
+  `--format markdown` writes the same table as the app's Copy as Markdown.
+- Lines are written as they're found, so output cut short is still usable.
+  Progress shows on stderr when it's a terminal.
+
 ## Notes
 
 - Symlinks are never followed. A symlink is compared by its target path.
@@ -89,6 +118,7 @@ DIRCOMPARE_SNAPSHOT=/tmp/out.png DIRCOMPARE_EXPAND="docs,docs/notes" \
 
 - `Sources/DirCompareCore`: scanning and comparison (no UI; covered by tests)
 - `Sources/DirCompare`: the SwiftUI app
+- `Sources/dircmp`: the command-line tool
 - `Tests/DirCompareCoreTests`: Swift Testing suite
-- `scripts/build-app.sh`: builds, bundles and signs the `.app`
+- `scripts/build-app.sh`: builds, bundles and signs the `.app`, and builds `dircmp`
 - `scripts/make-icon.swift`: renders the app icon

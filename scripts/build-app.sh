@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
-# Builds DirCompare.app into ./build, signed for local use.
+# Builds DirCompare.app and the dircmp command-line tool into ./build, signed
+# for local use.
 #
-#   scripts/build-app.sh            build ./build/DirCompare.app
-#   scripts/build-app.sh --install  also copy it to ~/Applications
-#   scripts/build-app.sh --open     also launch it
+#   scripts/build-app.sh                build ./build/DirCompare.app and ./build/dircmp
+#   scripts/build-app.sh --install      also copy the app to ~/Applications
+#   scripts/build-app.sh --install-cli  also copy dircmp to ~/.local/bin
+#   scripts/build-app.sh --open         also launch the app
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 install=false
+install_cli=false
 open_app=false
 for arg in "$@"; do
     case "$arg" in
         --install) install=true ;;
+        --install-cli) install_cli=true ;;
         --open) open_app=true ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
@@ -22,8 +26,9 @@ done
 app=build/DirCompare.app
 icon=build/AppIcon.icns
 
-echo "==> Building release binary"
+echo "==> Building release binaries"
 swift build -c release --product DirCompare
+swift build -c release --product dircmp
 bin_dir=$(swift build -c release --show-bin-path)
 
 if [[ ! -f "$icon" || scripts/make-icon.swift -nt "$icon" ]]; then
@@ -40,6 +45,7 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin_dir/DirCompare" "$app/Contents/MacOS/DirCompare"
 cp Resources/Info.plist "$app/Contents/Info.plist"
 cp "$icon" "$app/Contents/Resources/AppIcon.icns"
+cp "$bin_dir/dircmp" build/dircmp
 
 echo "==> Signing (ad hoc)"
 codesign --force --sign - --timestamp=none "$app"
@@ -54,8 +60,15 @@ if $install; then
     app="$dest"
 fi
 
+if $install_cli; then
+    dest="$HOME/.local/bin/dircmp"
+    echo "==> Installing dircmp to $dest"
+    mkdir -p "$HOME/.local/bin"
+    cp build/dircmp "$dest"
+fi
+
 if $open_app; then
     open "$app"
 fi
 
-echo "Done: $app"
+echo "Done: $app and build/dircmp"

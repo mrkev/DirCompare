@@ -123,6 +123,34 @@ extension DirectoryComparer {
         return summary
     }
 
+    /// Compares two folders recursively, calling `visit` with each row as it's found, in
+    /// path order. Folder pairs are descended into rather than visited, unless one couldn't
+    /// be read; then it's visited as `unreadable`, with the reason as its note.
+    ///
+    /// Unlike `summarizeFolders`, throws if `left` or `right` itself can't be read.
+    ///
+    /// - Parameters:
+    ///   - parent: The folder row `left` and `right` belong to, if they're a subfolder pair.
+    ///     Row IDs and paths are prefixed with its own, as with `compare(_:_:under:)`.
+    ///   - progress: Called at most every `progressInterval`, and once at the end.
+    public func walk(
+        _ left: URL,
+        _ right: URL,
+        under parent: ComparisonRow? = nil,
+        progressInterval: Duration = .milliseconds(100),
+        progress: (@Sendable (FolderProgress) -> Void)? = nil,
+        visit: (ComparisonRow) -> Void
+    ) throws -> FolderSummary {
+        // The walker keeps the visitor only until it returns.
+        try withoutActuallyEscaping(visit) { visit in
+            var walker = FolderWalker(comparer: self, keepLevels: false, progress: progress, interval: progressInterval)
+            walker.visit = visit
+            let summary = try walker.walkContents(left, right, under: parent, path: "")
+            walker.report(path: "", force: true)
+            return summary
+        }
+    }
+
     /// Checks a folder row's contents recursively, keeping the rows of every folder that
     /// differs so they can be shown without reading the disk again. Row IDs and paths are
     /// relative to the top level, like those from `compare(_:_:under:)`.
@@ -156,6 +184,7 @@ private struct FolderWalker {
     let progress: (@Sendable (FolderProgress) -> Void)?
     let interval: Duration
 
+    var visit: ((ComparisonRow) -> Void)?
     var levels: [ComparisonRow.ID: [ComparisonRow]] = [:]
     var itemsCompared = 0
     var lastReport = ContinuousClock.now
@@ -173,21 +202,32 @@ private struct FolderWalker {
     }
 
     /// Compares one folder pair and everything below it, returning its counts.
+    /// A pair that can't be listed counts as one unreadable item.
     ///
     /// - Parameters:
     ///   - parent: The folder row for this pair, used to prefix child IDs and paths.
     ///   - path: This pair's path relative to the folders being checked, for progress.
     mutating func walk(_ left: URL, _ right: URL, under parent: ComparisonRow?, path: String) throws -> FolderSummary {
-        var summary = FolderSummary()
-        let leftNames: [String: String]
-        let rightNames: [String: String]
         do {
-            leftNames = try comparer.listing(of: left)
-            rightNames = try comparer.listing(of: right)
+            return try walkContents(left, right, under: parent, path: path)
         } catch is ComparisonError {
+            var summary = FolderSummary()
             summary.unreadable += 1
             return summary
         }
+    }
+
+    /// Like `walk`, but throws `ComparisonError` if this pair can't be listed.
+    /// Subfolders that can't be listed are still counted, not thrown.
+    mutating func walkContents(
+        _ left: URL,
+        _ right: URL,
+        under parent: ComparisonRow?,
+        path: String
+    ) throws -> FolderSummary {
+        var summary = FolderSummary()
+        let leftNames = try comparer.listing(of: left)
+        let rightNames = try comparer.listing(of: right)
 
         let keys = Set(leftNames.keys).union(rightNames.keys)
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
@@ -204,12 +244,22 @@ private struct FolderWalker {
             }
 
             if row.status == .folders, let leftEntry, let rightEntry {
-                let child = try walk(leftEntry.url, rightEntry.url, under: row, path: childPath)
-                row.apply(child)
-                summary.merge(child)
+                do {
+                    let child = try walkContents(leftEntry.url, rightEntry.url, under: row, path: childPath)
+                    row.apply(child)
+                    summary.merge(child)
+                } catch let error as ComparisonError {
+                    var child = FolderSummary()
+                    child.unreadable = 1
+                    row.apply(child)
+                    row.note = error.localizedDescription
+                    summary.merge(child)
+                    visit?(row)
+                }
             } else {
                 summary.add(row.status)
                 itemsCompared += 1
+                visit?(row)
                 report(path: childPath, force: false)
             }
             if keepLevels {
