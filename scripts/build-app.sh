@@ -45,6 +45,9 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin_dir/DirCompare" "$app/Contents/MacOS/DirCompare"
 cp Resources/Info.plist "$app/Contents/Info.plist"
 cp "$icon" "$app/Contents/Resources/AppIcon.icns"
+# Remove before copying: overwriting a signed binary in place keeps its inode, and
+# macOS then kills it for not matching the signature it cached.
+rm -f build/dircmp
 cp "$bin_dir/dircmp" build/dircmp
 
 echo "==> Signing (ad hoc)"
@@ -64,6 +67,7 @@ if $install_cli; then
     dest="$HOME/.local/bin/dircmp"
     echo "==> Installing dircmp to $dest"
     mkdir -p "$HOME/.local/bin"
+    rm -f "$dest"
     cp build/dircmp "$dest"
 fi
 
