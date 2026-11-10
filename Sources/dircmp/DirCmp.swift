@@ -21,7 +21,8 @@ struct DirCmp: ParsableCommand {
               not-checked   same size but contents not compared (--no-contents),
                             or a special file
               identical     same bytes (listed only with --all)
-              folders       a folder pair, compared by date only (--shallow)
+              folders       a folder pair, not looked inside (--shallow); always
+                            listed, so you can follow up with --under
 
             Modification dates within --date-tolerance count as equal. A newer date \
             on its own isn't a difference: files with the same bytes are identical.
@@ -60,7 +61,7 @@ struct DirCmp: ParsableCommand {
     ))
     var under: String?
 
-    @Flag(help: "Compare only the items directly inside the folders. Folder pairs are compared by date only.")
+    @Flag(help: "Compare only the items directly inside the folders. Folder pairs are listed but not looked inside; follow up with --under.")
     var shallow = false
 
     @Flag(help: "List the items directly inside the folders, with each folder pair checked all the way down and shown with its counts.")

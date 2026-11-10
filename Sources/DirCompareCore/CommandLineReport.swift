@@ -20,7 +20,8 @@ extension ComparisonStatus {
 public enum ReportScope: String, Sendable, CaseIterable {
     /// Every item at every depth. Folder pairs are descended into, not listed.
     case recursive
-    /// Only the items directly inside the folders. Folder pairs are listed by date only.
+    /// Only the items directly inside the folders. Folder pairs are always listed, since
+    /// they haven't been compared, so they can be looked inside with `under`.
     case shallow
     /// The items directly inside the folders, with each folder pair checked all the way
     /// down and listed with its counts.
@@ -64,7 +65,7 @@ public struct CommandLineReport {
 
     public struct Outcome: Sendable, Hashable {
         public var summary: FolderSummary
-        /// Folder pairs listed by date only, in the shallow scope.
+        /// Folder pairs not looked inside, in the shallow scope.
         public var foldersNotCompared: Int
         public var listed: Int
         /// Rows that would have been listed but for the limit.
@@ -104,7 +105,8 @@ public struct CommandLineReport {
         }
 
         func emit(_ row: ComparisonRow) {
-            guard showAll || row.isDifference else { return }
+            let unexplored = scope == .shallow && row.status == .folders
+            guard showAll || unexplored || row.isDifference else { return }
             if let limit, outcome.listed >= limit {
                 outcome.omitted += 1
                 return
@@ -219,7 +221,7 @@ public struct CommandLineReport {
     func summaryText(_ outcome: Outcome) -> String {
         let folders = outcome.foldersNotCompared
         guard folders > 0 else { return outcome.summary.description }
-        let notCompared = "\(folders) folder\(folders == 1 ? "" : "s") not compared (--shallow)"
+        let notCompared = "\(folders) folder\(folders == 1 ? "" : "s") not compared; look inside with --under PATH"
         if outcome.summary.itemCount == 0 {
             return notCompared
         }

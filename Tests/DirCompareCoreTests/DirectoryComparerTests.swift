@@ -972,17 +972,35 @@ struct CommandLineReportTests {
         }
     }
 
-    @Test func shallowListsFoldersByDateOnly() throws {
+    @Test func shallowAlwaysListsFolderPairs() throws {
         let fixture = try Fixture()
         try tree(fixture)
 
         let (lines, outcome) = try run(report(fixture) { $0.scope = .shallow })
 
+        // docs and lib haven't been looked inside, so they're listed whatever their dates.
         #expect(lines == [
+            "folders      docs/",
+            "folders      lib/",
             "only-right   top.txt  (3 bytes)",
-            "Summary: 1 only right, 2 folders not compared (--shallow)",
+            "Summary: 1 only right, 2 folders not compared; look inside with --under PATH",
         ])
         #expect(outcome.foldersNotCompared == 2)
+        #expect(outcome.exitCode == 1)
+    }
+
+    @Test func shallowUnderASubfolder() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+
+        let (lines, outcome) = try run(report(fixture) { $0.scope = .shallow; $0.under = "docs" })
+
+        #expect(lines == [
+            "different    docs/a.md  (3 → 5 bytes; right newer)",
+            "only-left    docs/x.md  (0 bytes)",
+            "Summary: 1 only left, 1 different",
+        ])
+        #expect(outcome.foldersNotCompared == 0)
     }
 
     @Test func summaryChecksEachFolder() throws {

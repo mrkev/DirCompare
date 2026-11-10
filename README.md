@@ -80,7 +80,9 @@ Summary: 1 only left, 1 different
 
 - It compares the same way as the app (same statuses, ignore patterns, date
   tolerance and Unicode name matching), but recursively by default. `--shallow`
-  compares one level, like the app without the recursive check.
+  compares one level, like the app without the recursive check. It always lists
+  folder pairs, so you can look inside one with `--under PATH --shallow`, like
+  expanding a row in the app.
 - Only differences are listed; `--all` adds identical items.
 - Output stops after 200 items (`--limit`, 0 for no limit) and says how many
   more there were. For a big tree, survey it with `--summary` (one line per
