@@ -39,26 +39,33 @@ public enum MarkdownExport {
         right: URL,
         timeZone: TimeZone = .current
     ) -> String {
-        var lines = [
+        let lines = header(left: left, right: right) + rows.map { line(for: $0, timeZone: timeZone) }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// The lines before the first row: the folder paths, then the table's header.
+    public static func header(left: URL, right: URL) -> [String] {
+        [
             "- **Left:** `\(Formatting.path(left))`",
             "- **Right:** `\(Formatting.path(right))`",
             "",
             "| Path | Status | Left size | Right size | Left modified | Right modified | Newer |",
             "|---|---|---:|---:|---|---|---|",
         ]
-        for row in rows {
-            let cells = [
-                escape(row.path),
-                row.status.title,
-                Formatting.bytes(row.left?.displaySize),
-                Formatting.bytes(row.right?.displaySize),
-                Formatting.date(row.left?.modified, timeZone: timeZone),
-                Formatting.date(row.right?.modified, timeZone: timeZone),
-                Formatting.newer(row.newer),
-            ]
-            lines.append("| " + cells.joined(separator: " | ") + " |")
-        }
-        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// One row of the table.
+    public static func line(for row: ComparisonRow, timeZone: TimeZone = .current) -> String {
+        let cells = [
+            escape(row.path),
+            row.status.title,
+            Formatting.bytes(row.left?.displaySize),
+            Formatting.bytes(row.right?.displaySize),
+            Formatting.date(row.left?.modified, timeZone: timeZone),
+            Formatting.date(row.right?.modified, timeZone: timeZone),
+            Formatting.newer(row.newer),
+        ]
+        return "| " + cells.joined(separator: " | ") + " |"
     }
 
     static func escape(_ text: String) -> String {

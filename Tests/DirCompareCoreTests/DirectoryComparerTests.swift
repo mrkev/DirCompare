@@ -1059,9 +1059,34 @@ struct CommandLineReportTests {
 
         let (lines, _) = try run(report(fixture) { $0.format = .markdown })
 
-        #expect(lines.count == 3)
-        #expect(lines[0].contains("| docs/a.md | Different |"))
-        #expect(lines[1] == "")
-        #expect(lines[2].hasPrefix("Summary: "))
+        // A line per row, so output cut short still has every row found so far.
+        #expect(lines.count == 10)
+        #expect(lines[0].hasPrefix("- **Left:** "))
+        #expect(lines[5].hasPrefix("| docs/a.md | Different |"))
+        #expect(lines[8] == "")
+        #expect(lines[9].hasPrefix("Summary: "))
+    }
+
+    @Test func markdownHeaderEvenWithNoRows() throws {
+        let fixture = try Fixture()
+
+        let (lines, _) = try run(report(fixture) { $0.format = .markdown })
+
+        #expect(lines.count == 7)
+        #expect(lines[4] == "|---|---|---:|---:|---|---|---|")
+        #expect(lines[6] == "Summary: Both empty")
+    }
+
+    @Test func markdownMatchesTheAppsExport() throws {
+        let fixture = try Fixture()
+        try tree(fixture)
+        let utc = TimeZone(identifier: "UTC")!
+
+        let (lines, _) = try run(report(fixture) { $0.format = .markdown; $0.showAll = true; $0.timeZone = utc })
+
+        var rows: [ComparisonRow] = []
+        _ = try DirectoryComparer().walk(fixture.left, fixture.right) { rows.append($0) }
+        let table = MarkdownExport.render(rows: rows, left: fixture.left, right: fixture.right, timeZone: utc)
+        #expect(lines.dropLast(2).joined(separator: "\n") + "\n" == table)
     }
 }

@@ -93,7 +93,15 @@ public struct CommandLineReport {
     ) throws -> Outcome {
         let (leftBase, rightBase, parent) = try base()
         var outcome = Outcome(summary: FolderSummary(), foldersNotCompared: 0, listed: 0, omitted: 0)
-        var markdownRows: [ComparisonRow] = []
+        var wroteMarkdownHeader = false
+
+        // Written with the first row rather than up front, so a folder that can't be
+        // read doesn't leave a table header behind.
+        func writeMarkdownHeader() {
+            guard format == .markdown, !wroteMarkdownHeader else { return }
+            wroteMarkdownHeader = true
+            MarkdownExport.header(left: left, right: right).forEach(write)
+        }
 
         func emit(_ row: ComparisonRow) {
             guard showAll || row.isDifference else { return }
@@ -105,7 +113,9 @@ public struct CommandLineReport {
             switch format {
             case .text: write(textLine(row))
             case .json: write(jsonLine(row))
-            case .markdown: markdownRows.append(row)
+            case .markdown:
+                writeMarkdownHeader()
+                write(MarkdownExport.line(for: row, timeZone: timeZone))
             }
         }
 
@@ -137,9 +147,7 @@ public struct CommandLineReport {
             }
         }
 
-        if format == .markdown {
-            write(MarkdownExport.render(rows: markdownRows, left: left, right: right, timeZone: timeZone))
-        }
+        writeMarkdownHeader()
         for line in trailer(outcome) {
             write(line)
         }
